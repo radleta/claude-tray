@@ -19,17 +19,24 @@ public sealed class DaemonHost
     private readonly SessionChangeQueue _queue;
     private readonly TimeSpan _drainInterval;
     private readonly ILogger _logger;
+    private readonly HeartbeatWriter? _heartbeat;
 
+    /// <param name="heartbeat">
+    /// The file-sink liveness signal, beaten off this loop's tick. Null in tests that are only
+    /// exercising the drain; the daemon always supplies one.
+    /// </param>
     public DaemonHost(
         SessionPublisher publisher,
         SessionChangeQueue queue,
         TimeSpan drainInterval,
-        ILogger logger)
+        ILogger logger,
+        HeartbeatWriter? heartbeat = null)
     {
         _publisher = publisher;
         _queue = queue;
         _drainInterval = drainInterval;
         _logger = logger;
+        _heartbeat = heartbeat;
     }
 
     /// <summary>
@@ -42,11 +49,22 @@ public sealed class DaemonHost
 
         try
         {
+            // Beside the snapshot, not only inside the loop: a receiver that read the
+            // heartbeat directory during the first period would otherwise see the previous
+            // run's stale beat and call a daemon that just started disconnected.
+            _heartbeat?.WriteIfDue(DateTimeOffset.UtcNow);
+
             await _publisher.PublishSnapshotAsync(cancellationToken).ConfigureAwait(false);
 
             using var timer = new PeriodicTimer(_drainInterval);
             while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
             {
+                // Unconditional, and before the drain: the beat says this process is alive,
+                // which is true whether or not any session changed. Gating it on publishing
+                // would make a quiet publisher read as a gone one — the inference-from-silence
+                // failure this whole mechanism is shaped to avoid.
+                _heartbeat?.WriteIfDue(DateTimeOffset.UtcNow);
+
                 await DrainOnceAsync(cancellationToken).ConfigureAwait(false);
             }
         }

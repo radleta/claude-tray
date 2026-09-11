@@ -13,6 +13,7 @@ public class DaemonHostTests : IDisposable
     private readonly SessionChangeQueue _queue = new();
     private readonly FileSink _sink;
     private readonly DaemonHost _host;
+    private readonly DaemonHost _heartbeatHost;
 
     public DaemonHostTests()
     {
@@ -27,6 +28,16 @@ public class DaemonHostTests : IDisposable
             _sessionsDir, _reader, () => [_sink], NullLogger.Instance);
 
         _host = new DaemonHost(publisher, _queue, TimeSpan.FromMilliseconds(10), NullLogger.Instance);
+
+        _heartbeatHost = new DaemonHost(
+            publisher,
+            _queue,
+            TimeSpan.FromMilliseconds(10),
+            NullLogger.Instance,
+            new HeartbeatWriter(
+                () => [new PublisherEntry { Name = "host", Endpoint = _targetDir }],
+                () => "workstation-Ubuntu",
+                NullLogger.Instance));
     }
 
     public void Dispose()
@@ -150,6 +161,57 @@ public class DaemonHostTests : IDisposable
         await _host.RunAsync(cts.Token);
 
         Directory.GetFiles(_targetDir).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunAsync_BeatsBeforeTheFirstLoopTick()
+    {
+        // Not only inside the loop: a receiver reading during the first period would otherwise
+        // see the previous run's stale beat and call a daemon that just started disconnected.
+        using var cts = new CancellationTokenSource();
+
+        var run = _heartbeatHost.RunAsync(cts.Token);
+        await WaitFor(() => File.Exists(PublisherHeartbeat.PathFor(_targetDir, "workstation-Ubuntu")));
+        await cts.CancelAsync();
+        await run;
+
+        File.Exists(PublisherHeartbeat.PathFor(_targetDir, "workstation-Ubuntu")).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RunAsync_BeatsWithNoSessionsAtAll()
+    {
+        // Constraint 1: the beat rides the loop tick, never session activity, so a publisher
+        // with nothing to say still reads as alive.
+        using var cts = new CancellationTokenSource();
+
+        var run = _heartbeatHost.RunAsync(cts.Token);
+        await WaitFor(() => File.Exists(PublisherHeartbeat.PathFor(_targetDir, "workstation-Ubuntu")));
+        await cts.CancelAsync();
+        await run;
+
+        Directory.GetFiles(_targetDir).Should().BeEmpty("no session was published");
+    }
+
+    [Fact]
+    public async Task RunAsync_TheBeatItWritesIsTheBeatAReceiverReads()
+    {
+        // The two ends meet on PublisherHeartbeat's path and format; this is the round trip.
+        using var cts = new CancellationTokenSource();
+        var run = _heartbeatHost.RunAsync(cts.Token);
+        await WaitFor(() => File.Exists(PublisherHeartbeat.PathFor(_targetDir, "workstation-Ubuntu")));
+        await cts.CancelAsync();
+        await run;
+
+        var watch = new HeartbeatWatch(PublisherHeartbeat.DirectoryFor(_targetDir));
+        watch.Refresh();
+
+        watch.IsDisconnected("workstation-Ubuntu", DateTimeOffset.UtcNow)
+            .Should().BeFalse("the daemon is beating");
+        watch.IsDisconnected(
+                "workstation-Ubuntu",
+                DateTimeOffset.UtcNow + PublisherHeartbeat.StaleAfter + TimeSpan.FromSeconds(1))
+            .Should().BeTrue("a daemon that stopped beating reads as gone");
     }
 
     private static async Task WaitFor(Func<bool> condition)

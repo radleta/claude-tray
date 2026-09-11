@@ -339,6 +339,7 @@ That makes it a shell guard **conditionally**: with live health, a `Failed` link
 
 - Clicking one switches to its publisher's mapped desktop and stops there — there is no terminal window on this machine to focus. A WSL distro on *this* box is recognized as the same machine and gets ordinary local focusing.
 - When a publisher's link drops, its session icons get a **dashed ring** and shrink slightly — a distinct treatment from the aging dim, so you can tell "stale" from "unreachable" at a glance.
+  A publisher reached over TCP is unreachable the moment its connection drops. A WSL publisher writing through `/mnt/c` has no connection, so it writes a small heartbeat file into `~/.imrdy/heartbeats/` every five seconds instead; stopping the distro stops the heartbeat, and about twenty seconds later its sessions pick up the same treatment. A publisher that never writes a heartbeat is simply never marked unreachable — imrdy will not guess from silence.
 - Sessions from a disconnected publisher are never removed automatically. Use **Clear sessions** in the Connections window when you want them gone.
 - The tray tooltip reads `project@machine: session-name …` and the hover dashboard shows a machine chip beside the desktop chip.
 

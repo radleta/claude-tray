@@ -117,6 +117,13 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter, I
     private SessionPublisher? _sessionPublisher;
     private WireListener? _wireListener;
 
+    /// <summary>
+    /// The file sink's liveness signal (r-3). A TCP publisher's socket is its own heartbeat;
+    /// a file-sink publisher has no connection, so it writes a beat instead and this reads it.
+    /// Refreshed from the aging tick, resolved at render time, never persisted.
+    /// </summary>
+    private readonly HeartbeatWatch _heartbeats = new(ImrdyPaths.Heartbeats);
+
     /// <summary>D26's connections window. Created once on first open and reused; hidden on close, never disposed until shutdown.</summary>
     private ConnectionsForm? _connectionsForm;
     private NetworkConfig _networkConfig = new();
@@ -360,6 +367,10 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter, I
         _staleTimer = new System.Windows.Forms.Timer { Interval = 60_000 };
         _staleTimer.Tick += OnStaleTimerTick;
         _staleTimer.Start();
+
+        // One read before the first aging tick, so a session icon created in the next five
+        // seconds is not blind to a publisher that is already gone.
+        _heartbeats.Refresh();
 
         // Aging timer: fades icons over time (5s)
         _agingTimer = new System.Windows.Forms.Timer { Interval = 5000 };
@@ -784,6 +795,11 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter, I
     {
         try
         {
+            // The one disk read behind IsPublisherDisconnected's heartbeat branch. It rides
+            // this existing 5s tick rather than a timer of its own, and 5s is well inside
+            // PublisherHeartbeat.StaleAfter, so nothing is missed by refreshing here.
+            _heartbeats.Refresh();
+
             foreach (var (_, entry) in _sessions)
             {
                 if (entry.Icon is null) continue;
@@ -1662,31 +1678,46 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter, I
         entry.State.OriginMachine is string origin && _publisherStore.Find(origin)?.Muted == true;
 
     /// <summary>
-    /// D20: whether this session's publisher has lost its link. The only signal is the
-    /// inbound link's own health — <see cref="WireListener"/> flips a publisher to
-    /// <see cref="SinkState.Failed"/> when its connection drops and leaves the sessions on
-    /// disk, so a session whose machine reads failed is exactly a session with a stale
-    /// last-known state.
+    /// D20: whether this session's publisher has lost its link. Two signals, one per
+    /// transport, in that order.
     /// <para>
-    /// A file-sink publisher has no link and so never appears in this table (D27), which is
-    /// correct rather than a gap: there is no connection whose loss could be observed, and
-    /// reporting one as disconnected would be a guess.
+    /// <b>A TCP publisher answers from its link.</b> <see cref="WireListener"/> flips a
+    /// publisher to <see cref="SinkState.Failed"/> when its connection drops and leaves the
+    /// sessions on disk, so a session whose machine reads failed is exactly a session with a
+    /// stale last-known state. Where a link exists it stays authoritative — the socket is a
+    /// continuous liveness signal and nothing beats it.
+    /// </para>
+    /// <para>
+    /// <b>A file-sink publisher answers from its heartbeat (r-3).</b> It opens no connection,
+    /// so it never appears in that table (D27) and for the whole of this build a terminated
+    /// WSL distro rendered exactly like a merely-quiet one. It now writes a beat on its own
+    /// interval instead, and a stale beat is the file sink's equivalent of a dropped socket.
+    /// See <see cref="PublisherHeartbeat"/> for why that is an explicit positive signal rather
+    /// than inference from silence, and <see cref="HeartbeatWatch"/> for why a machine that
+    /// has never beaten reads as connected rather than as gone.
+    /// </para>
+    /// <para>
+    /// Nothing here is persisted. The answer is recomputed per render, the shape
+    /// <c>DisplayStatus.Resolve</c> established: writing it into session state is what froze
+    /// sessions at an un-re-derivable value the last time this project inferred liveness.
     /// </para>
     /// </summary>
     private bool IsPublisherDisconnected(SessionEntry entry)
     {
         if (entry.State?.OriginMachine is not string origin) return false;
-        if (_wireListener is null) return false;
 
-        foreach (var link in _wireListener.Health())
+        if (_wireListener is not null)
         {
-            if (string.Equals(link.Name, origin, StringComparison.OrdinalIgnoreCase))
+            foreach (var link in _wireListener.Health())
             {
-                return link.State == SinkState.Failed;
+                if (string.Equals(link.Name, origin, StringComparison.OrdinalIgnoreCase))
+                {
+                    return link.State == SinkState.Failed;
+                }
             }
         }
 
-        return false;
+        return _heartbeats.IsDisconnected(origin, DateTimeOffset.UtcNow);
     }
 
     /// <summary>

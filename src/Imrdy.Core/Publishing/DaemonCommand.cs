@@ -69,7 +69,14 @@ public static class DaemonCommand
             heldLock.OwnerPid,
             ImrdyPaths.Sessions);
 
-        await new DaemonHost(publisher, queue, DrainInterval, logger)
+        // The links are re-read per beat rather than captured, so a file link added through the
+        // receiver's connections window starts beating without a daemon restart (D25).
+        var heartbeat = new HeartbeatWriter(
+            () => store.Load().Publishers,
+            () => machineName,
+            logger);
+
+        await new DaemonHost(publisher, queue, DrainInterval, logger, heartbeat)
             .RunAsync(cancellationToken)
             .ConfigureAwait(false);
 
