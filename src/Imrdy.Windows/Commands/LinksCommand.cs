@@ -45,8 +45,7 @@ internal static class LinksCommand
 
         try
         {
-            var (vm, live, refusal) = Resolve(store);
-            var healthLine = live ? LinksReport.LiveHealth : LinksReport.RecordsOnly(refusal);
+            var (vm, live, healthLine) = Resolve(store);
 
             if (json)
             {
@@ -72,13 +71,16 @@ internal static class LinksCommand
     /// <summary>
     /// The tray's live view if one answers usefully, the records otherwise.
     /// <para>
-    /// Four failures fall back rather than throwing, and they are not the same failure. Three
-    /// mean no tray is on the other end. The fourth is a tray that answered and refused — a
-    /// handler exception, the server's 2-second budget expiring, or <c>unknown verb</c>, which
-    /// is what an older tray beside a newer CLI returns during an upgrade. That last case is
-    /// the reason falling back is worth having at all, and it is also why the refusal comes
-    /// back to the caller: telling the operator "no tray answered" when one did sends them
-    /// looking for a stopped process that is running.
+    /// Five paths fall back rather than throwing, and they are not the same failure, so each
+    /// composes its own health line rather than leaving the caller to guess a cause from a null.
+    /// An <c>IMRDY_HOME</c> override and two exception arms mean no tray is on the other end. A
+    /// tray that answered and <em>refused</em> — a handler exception, the server's 2-second
+    /// budget expiring, or <c>unknown verb</c>, which is what an older tray beside a newer CLI
+    /// returns during an upgrade — is the case that makes falling back worth having at all, and
+    /// its refusal is echoed back. A tray that accepted the connection and then went silent past
+    /// the client's exchange deadline is the fifth, and it is neither of the others: the process
+    /// is running and holding the pipe, so both "no tray answered" and "answered with an error"
+    /// would send the operator somewhere wrong.
     /// </para>
     /// <para>
     /// Everything else is a real defect — a malformed response or a serialization fault — and
@@ -86,17 +88,17 @@ internal static class LinksCommand
     /// </para>
     /// </summary>
     /// <returns>
-    /// The rows, whether they are live, and — when a tray answered and refused — what it said.
-    /// A null refusal on a non-live result means nothing answered.
+    /// The rows, whether they are live, and the one line telling the operator which of those
+    /// cases produced them — which they are told to read before trusting the exit code.
     /// </returns>
-    private static (ConnectionsViewModel Vm, bool Live, string? Refusal) Resolve(PublisherStore store)
+    private static (ConnectionsViewModel Vm, bool Live, string HealthLine) Resolve(PublisherStore store)
     {
         // IMRDY_HOME says "report this state". A running tray is serving whatever home it was
         // started with, which under an override is a different one — so its live health would
         // answer a question nobody asked. The records are the only honest answer here.
         if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("IMRDY_HOME")))
         {
-            return (BuildFromRecords(store), false, null);
+            return (BuildFromRecords(store), false, LinksReport.RecordsOnly(null));
         }
 
         try
@@ -106,10 +108,11 @@ internal static class LinksCommand
 
             if (response.Error is null && response.Links is { } live)
             {
-                return (live, true, null);
+                return (live, true, LinksReport.LiveHealth);
             }
 
-            return (BuildFromRecords(store), false, DescribeRefusal(response));
+            return (BuildFromRecords(store), false,
+                LinksReport.RecordsOnly(DescribeRefusal(response)));
         }
         catch (InvalidOperationException)
         {
@@ -122,10 +125,16 @@ internal static class LinksCommand
         }
         catch (TimeoutException)
         {
-            // The read phase's remaining budget expired; Send only wraps the connect phase.
+            // A tray accepted the connection and then did not finish the exchange within the
+            // client's deadline: wedged, or shutting down mid-answer. Records-only is the right
+            // answer, but "no tray answered" is not — the process is running and holding the
+            // pipe, and saying otherwise sends the operator hunting something that is not the
+            // problem. This is the one cause the exchange deadline exists to detect.
+            return (BuildFromRecords(store), false, LinksReport.RecordsOnlyUnresponsive(
+                $"{InspectIpcClient.ExchangeTimeout.TotalSeconds:0.#}s"));
         }
 
-        return (BuildFromRecords(store), false, null);
+        return (BuildFromRecords(store), false, LinksReport.RecordsOnly(null));
     }
 
     /// <summary>Longest refusal reason echoed back; an exception message can be a stack-sized string.</summary>

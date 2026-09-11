@@ -67,6 +67,12 @@ public sealed class PublisherStore
     /// A null <paramref name="endpoint"/> registers the machine receive-only (r-1): the record
     /// carries its desktop mapping and mute, and nothing dials it.
     /// </para>
+    /// <para>
+    /// Like the per-field setters below, this has no production caller left — <see cref="Upsert"/>
+    /// replaced the save path — and the same warning applies: it is not the established route for
+    /// a new mutation surface, and a surface that writes through it still owes the reconcile
+    /// described there.
+    /// </para>
     /// </summary>
     public void Add(string name, string? endpoint)
     {
@@ -80,6 +86,51 @@ public sealed class PublisherStore
         else
         {
             config.Publishers.Add(new PublisherEntry { Name = name, Endpoint = endpoint });
+        }
+
+        Save(config);
+    }
+
+    /// <summary>
+    /// Writes one whole record, replacing any existing link of the same name. For the caller
+    /// that already holds every field — the connections window's save path, where the edit
+    /// dialog produces a complete <see cref="PublisherEntry"/> — this is one Load-mutate-Save
+    /// instead of an <see cref="Add"/> followed by a setter per field, each of which is its own
+    /// atomic write and its own reconcile opportunity.
+    /// <para>
+    /// The per-field setters below are unaffected and remain the way to change one field
+    /// without holding the rest, which is how <see cref="Imrdy.Core.Workspace.WorkspaceStore"/>
+    /// is shaped. Since this method replaced the save path, they have no production caller left
+    /// — only tests — so do not read them as the established route for a new surface.
+    /// </para>
+    /// <para>
+    /// <b>Whatever a new mutation surface writes through, it must then trigger a sink
+    /// reconcile.</b> Writing publishers.json is only half of a record change: reading link
+    /// health no longer reconciles, so nothing else will notice. The connections window's save
+    /// and remove paths are the working example — each ends in the tray's
+    /// <c>ReconcileSinksOffThread</c>, and they are currently the only two triggers keeping
+    /// D25's live reload alive. A surface that calls a setter here and returns leaves the sink
+    /// set stale until something else happens to reconcile.
+    /// </para>
+    /// <para>
+    /// The supplied entry wins outright, its <see cref="PublisherEntry.Name"/> included, so a
+    /// case-only correction to a machine name takes effect. The rename of an actually different
+    /// name is a separate <see cref="Remove"/> of the old record, not this call: two records are
+    /// two writes because they are two records.
+    /// </para>
+    /// </summary>
+    public void Upsert(PublisherEntry entry)
+    {
+        var config = Load();
+        var index = config.Publishers.FindIndex(p => NameEquals(p.Name, entry.Name));
+
+        if (index >= 0)
+        {
+            config.Publishers[index] = entry;
+        }
+        else
+        {
+            config.Publishers.Add(entry);
         }
 
         Save(config);

@@ -264,4 +264,21 @@ public class LinksReportTests
             .And.Contain("unknown verb: links-live")
             .And.NotContain("no tray answered");
     }
+
+    [Fact]
+    public void RecordsOnlyUnresponsive_SaysNeitherAbsentNorErrored()
+    {
+        // A wedged tray is running and holding the pipe, so both other causes misdirect: "no
+        // tray answered" sends the operator after a live process, and "answered with an error"
+        // implies a reply that never came. The action this one calls for — restart the tray —
+        // is not the action either other cause implies.
+        var line = LinksReport.RecordsOnlyUnresponsive("5s");
+
+        line.Should().Contain("accepted the connection")
+            .And.Contain("5s")
+            .And.NotContain("no tray answered")
+            .And.NotContain("answered with an error");
+
+        line.Should().Contain("always exits 0", "every records-only line carries the exit caveat");
+    }
 }

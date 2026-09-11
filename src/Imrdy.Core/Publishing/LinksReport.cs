@@ -89,14 +89,24 @@ public static class LinksReport
     /// <param name="reason">
     /// What the tray said, when one answered and refused; null when nothing answered at all.
     /// </param>
-    public static string RecordsOnly(string? reason)
-    {
-        var cause = reason is null
+    public static string RecordsOnly(string? reason) =>
+        Compose(reason is null
             ? "no tray answered"
-            : $"the tray answered with an error ({reason})";
+            : $"the tray answered with an error ({reason})");
 
-        return $"health: records only, {cause} — link state is unknown and this run always exits 0";
-    }
+    /// <summary>
+    /// The third cause, and the one neither of the other two describes: a tray that accepted the
+    /// connection and then did not finish the exchange within the client's deadline. It is not
+    /// absent — it holds the pipe — and it did not answer with an error, so saying either sends
+    /// the operator somewhere wrong. A wedged tray is the case worth naming precisely, because
+    /// the action it calls for (restart the tray) is not the action either other cause implies.
+    /// </summary>
+    /// <param name="detail">How long the client waited, for an operator sizing the problem.</param>
+    public static string RecordsOnlyUnresponsive(string detail) =>
+        Compose($"the tray accepted the connection but did not answer within {detail}");
+
+    private static string Compose(string cause) =>
+        $"health: records only, {cause} — link state is unknown and this run always exits 0";
 
     /// <summary>
     /// Column-aligned plain text for <c>Imrdy.Linux</c>, which adds no CLI framework (D26).

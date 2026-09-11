@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Imrdy.Core;
+using Imrdy.Core.Publishing;
 using Imrdy.Core.Sound;
 using Imrdy.Core.Validation;
 using Microsoft.Extensions.DependencyInjection;
@@ -205,6 +206,9 @@ internal static class ConfigCommand
             ["sounds"] = ImrdyPaths.SoundsDir,
             ["packs"] = ImrdyPaths.PacksDir,
             ["logs"] = ImrdyPaths.LogsDir,
+            ["publishers"] = ImrdyPaths.Publishers,
+            ["daemon-lock"] = ImrdyPaths.DaemonLock,
+            ["daemon-pid"] = DaemonLock.PidFilePathFor(ImrdyPaths.DaemonLock),
         };
 
         if (json)
@@ -220,9 +224,11 @@ internal static class ConfigCommand
 
         foreach (var (name, path) in paths.OrderBy(p => p.Key))
         {
-            var exists = path.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
-                ? File.Exists(path)
-                : Directory.Exists(path);
+            // Asking both is the only test that holds for every row. Deciding file-versus-
+            // directory from a ".json" suffix worked while every file here was config JSON;
+            // daemon.lock and daemon.pid are files with other extensions, and probing those
+            // with Directory.Exists would report the lock missing while the daemon holds it.
+            var exists = File.Exists(path) || Directory.Exists(path);
 
             table.AddRow(
                 Markup.Escape(name),

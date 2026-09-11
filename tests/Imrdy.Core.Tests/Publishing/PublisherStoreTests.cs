@@ -77,6 +77,66 @@ public class PublisherStoreTests : IDisposable
     }
 
     [Fact]
+    public void Upsert_NewName_WritesEveryFieldInOneGo()
+    {
+        _store.Upsert(new PublisherEntry
+        {
+            Name = "desk2",
+            Endpoint = "100.64.0.5:47600",
+            DesktopIndex = 3,
+            Muted = true,
+            Enabled = false,
+        });
+
+        var entry = _store.Find("desk2")!;
+        entry.Endpoint.Should().Be("100.64.0.5:47600");
+        entry.DesktopIndex.Should().Be(3);
+        entry.Muted.Should().BeTrue();
+        entry.Enabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Upsert_ExistingName_ReplacesTheWholeRecord()
+    {
+        // This is the difference from Add, which keeps per-link settings: the connections
+        // window's save path holds every field already, so the record it hands over is the
+        // record — a field cleared in the dialog must not survive the save.
+        _store.Add("desk2", "100.64.0.5:47600");
+        _store.SetDesktopIndex("desk2", 2);
+        _store.SetMuted("desk2", true);
+
+        _store.Upsert(new PublisherEntry { Name = "desk2", Endpoint = "100.64.0.9:47600" });
+
+        var entry = _store.Find("desk2")!;
+        entry.Endpoint.Should().Be("100.64.0.9:47600");
+        entry.DesktopIndex.Should().BeNull();
+        entry.Muted.Should().BeFalse();
+        _store.Load().Publishers.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void Upsert_NullEndpoint_RegistersReceiveOnly()
+    {
+        _store.Upsert(new PublisherEntry { Name = "mac-mini", Endpoint = null });
+
+        _store.Find("mac-mini")!.Endpoint.Should().BeNull();
+    }
+
+    [Fact]
+    public void Upsert_CaseOnlyNameChange_TakesTheSuppliedCasing()
+    {
+        // A rename to a genuinely different name is a separate Remove of the old record, but a
+        // case-only correction addresses the same record — so the supplied entry wins outright
+        // rather than leaving the operator's fix silently unapplied.
+        _store.Add("Desk2", "100.64.0.5:47600");
+
+        _store.Upsert(new PublisherEntry { Name = "desk2", Endpoint = "100.64.0.5:47600" });
+
+        _store.Load().Publishers.Should().ContainSingle()
+            .Which.Name.Should().Be("desk2");
+    }
+
+    [Fact]
     public void Find_IsCaseInsensitive()
     {
         _store.Add("Workstation-Ubuntu", "/mnt/c/sessions");

@@ -1566,13 +1566,10 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter, I
     /// <inheritdoc/>
     void IConnectionsHost.SavePublisher(PublisherEntry entry, string? previousName)
     {
-        // Add is idempotent on the name, so save is add-then-set rather than a second write
-        // path: PublisherStore's per-field setters are the only mutators, exactly as
-        // WorkspaceStore's are.
-        _publisherStore.Add(entry.Name, entry.Endpoint);
-        _publisherStore.SetDesktopIndex(entry.Name, entry.DesktopIndex);
-        _publisherStore.SetMuted(entry.Name, entry.Muted);
-        _publisherStore.SetEnabled(entry.Name, entry.Enabled);
+        // The dialog hands back a complete record, so this is one write. It used to be an Add
+        // plus a setter per field — five atomic write-and-fsync cycles for one operator click,
+        // each one a moment where publishers.json held a half-saved record.
+        _publisherStore.Upsert(entry);
 
         // A rename is an upsert under the new name plus a removal of the old one; without the
         // second half the operator ends up with two records for one machine, the stale one still
@@ -1585,9 +1582,11 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter, I
             _logger.LogInformation("Connections: renamed link {Previous} → {Name}", previousName, entry.Name);
         }
 
-        // D25 and the acceptance outcome: no restart. SinkRegistry reconciles against the
-        // file on its next Current() call, which the drain tick makes within 100ms.
         _logger.LogInformation("Connections: saved link {Name} → {Endpoint}", entry.Name, entry.Endpoint ?? "(receive-only)");
+
+        // D25 and the acceptance outcome: no restart. The record changed, so the sink set is
+        // brought in step now rather than whenever something else happens to reconcile.
+        ReconcileSinksOffThread();
     }
 
     /// <inheritdoc/>
@@ -1596,6 +1595,39 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter, I
         _publisherStore.Remove(name);
         ClearSessionsFromMachine(name);
         _logger.LogInformation("Connections: removed link {Name}", name);
+        ReconcileSinksOffThread();
+    }
+
+    /// <summary>
+    /// Rebuilds the sink set after a publishers.json change, off the UI thread.
+    /// <para>
+    /// Both callers run on the UI thread, from a connections-window button. Reconciling inline
+    /// would dispose every evicted <see cref="TcpSink"/> there, and each of those blocks for up
+    /// to its two-second grace window — so removing a handful of links would freeze the tray
+    /// icons, the overlay and every menu for as many multiples of two seconds. Nothing waits on
+    /// the result: the window's own refresh tick renders the records immediately and picks up
+    /// the sinks on a later tick.
+    /// </para>
+    /// </summary>
+    private void ReconcileSinksOffThread()
+    {
+        var registry = _sinkRegistry;
+        if (registry is null)
+        {
+            return;
+        }
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                registry.Reconcile();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Reconciling sinks after a publishers.json change failed");
+            }
+        });
     }
 
     /// <inheritdoc/>

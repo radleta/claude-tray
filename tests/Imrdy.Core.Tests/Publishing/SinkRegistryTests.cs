@@ -151,6 +151,7 @@ public class SinkRegistryTests : IDisposable
         // publisher shares one origin machine name, so that name cannot be the identifier.
         _store.Add("host-a", _mountA);
         _store.Add("host-b", _mountB);
+        _registry.Reconcile();
 
         _registry.Health().Select(h => h.Name).Should().BeEquivalentTo(["host-a", "host-b"]);
     }
@@ -160,9 +161,56 @@ public class SinkRegistryTests : IDisposable
     {
         _store.Add("host-a", _mountA);
         _store.Add("host-b", _mountB);
+        _registry.Reconcile();
 
         _registry.Health().Should().HaveCount(2);
         _registry.Health().Should().AllSatisfy(h => h.State.Should().Be(SinkState.FileSink));
+    }
+
+    [Fact]
+    public void Health_DoesNotReconcile_BecauseItsCallersAreOnTheUiThread()
+    {
+        // Health() is read by the links-live IPC handler and by the connections window's
+        // refresh tick, both on the tray's UI thread. Reconciling there would dispose evicted
+        // TCP sinks inline, and each of those blocks for up to its two-second grace window —
+        // freezing the message pump, and with it the tray icons, the overlay and every menu.
+        // So a record that has never been reconciled is invisible to Health() by design.
+        _store.Add("host-a", _mountA);
+
+        _registry.Health().Should().BeEmpty();
+
+        // ...and the mutating calls are what make it visible. Current() is the publish path's;
+        // Reconcile() is the one a record change triggers.
+        _registry.Reconcile();
+        _registry.Health().Should().ContainSingle();
+    }
+
+    [Fact]
+    public void Reconcile_AfterDispose_BuildsNothing()
+    {
+        // A reconcile is queued onto a pool thread per record change, so one can still be in
+        // flight when the tray shuts down. Building there would dial a fresh set of sinks after
+        // Dispose emptied the dictionary — sockets and dial loops with no owner left to close
+        // them.
+        _store.Add("host-a", _mountA);
+        _registry.Dispose();
+
+        _registry.Reconcile();
+
+        _registry.Health().Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Reconcile_DropsASinkWhoseRecordIsGone()
+    {
+        _store.Add("host-a", _mountA);
+        _registry.Reconcile();
+        _registry.Health().Should().ContainSingle();
+
+        _store.Remove("host-a");
+        _registry.Reconcile();
+
+        _registry.Health().Should().BeEmpty();
     }
 
     [Fact]
