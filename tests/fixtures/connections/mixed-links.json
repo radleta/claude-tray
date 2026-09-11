@@ -1,0 +1,116 @@
+{
+  "machineName": "workstation",
+  "listenEnabled": true,
+  "listenPort": 47600,
+  "authKeyConfigured": true,
+  "rows": [
+    {
+      "name": "desk2",
+      "endpoint": "100.64.0.2:47600",
+      "isRegistered": true,
+      "enabled": true,
+      "muted": false,
+      "desktopIndex": 3,
+      "outbound": {
+        "name": "desk2",
+        "state": 0,
+        "lastSuccessAt": "2026-09-10T14:58:12+00:00",
+        "lastError": null,
+        "sessionCount": 4
+      },
+      "inbound": {
+        "name": "desk2",
+        "state": 0,
+        "lastSuccessAt": "2026-09-10T14:58:40+00:00",
+        "lastError": null,
+        "sessionCount": 4
+      },
+      "lastDelivery": "1m ago"
+    },
+    {
+      "name": "desk2-Ubuntu-22.04",
+      "endpoint": "C:\\Users\\me\\.imrdy\\sessions",
+      "isRegistered": true,
+      "enabled": true,
+      "muted": true,
+      "desktopIndex": 3,
+      "outbound": {
+        "name": "desk2-Ubuntu-22.04",
+        "state": 3,
+        "lastSuccessAt": "2026-09-10T14:57:02+00:00",
+        "lastError": null,
+        "sessionCount": 2
+      },
+      "inbound": null,
+      "lastDelivery": "2m ago"
+    },
+    {
+      "name": "laptop",
+      "endpoint": "100.64.0.3:47600",
+      "isRegistered": true,
+      "enabled": true,
+      "muted": false,
+      "desktopIndex": null,
+      "outbound": {
+        "name": "laptop",
+        "state": 2,
+        "lastSuccessAt": null,
+        "lastError": "No connection could be made because the target machine actively refused it",
+        "sessionCount": 0
+      },
+      "inbound": {
+        "name": "laptop",
+        "state": 2,
+        "lastSuccessAt": "2026-09-09T22:14:00+00:00",
+        "lastError": "disconnected",
+        "sessionCount": 1
+      },
+      "lastDelivery": "16h 46m ago"
+    },
+    {
+      "name": "mac-mini",
+      "endpoint": null,
+      "isRegistered": true,
+      "enabled": true,
+      "muted": false,
+      "desktopIndex": 2,
+      "outbound": null,
+      "inbound": {
+        "name": "mac-mini",
+        "state": 0,
+        "lastSuccessAt": "2026-09-10T14:56:30+00:00",
+        "lastError": null,
+        "sessionCount": 2
+      },
+      "lastDelivery": "3m ago"
+    },
+    {
+      "name": "old-tower",
+      "endpoint": "100.64.0.4:47600",
+      "isRegistered": true,
+      "enabled": false,
+      "muted": false,
+      "desktopIndex": 5,
+      "outbound": null,
+      "inbound": null,
+      "lastDelivery": "never"
+    },
+    {
+      "name": "stranger",
+      "endpoint": null,
+      "isRegistered": false,
+      "enabled": true,
+      "muted": false,
+      "desktopIndex": null,
+      "outbound": null,
+      "inbound": {
+        "name": "stranger",
+        "state": 0,
+        "lastSuccessAt": "2026-09-10T14:59:01+00:00",
+        "lastError": null,
+        "sessionCount": 1
+      },
+      "lastDelivery": "59s ago"
+    }
+  ]
+}

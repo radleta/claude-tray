@@ -1,7 +1,7 @@
-using System.Text;
 using System.Text.Json;
 using Imrdy.Core.State;
 using Imrdy.Core.Status;
+using Imrdy.Core.Validation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -58,7 +58,7 @@ internal static class HookCommand
         }
 
         // Validate session_id is a safe filename (Claude Code uses UUIDs)
-        if (!IsValidSessionId(hookEvent.SessionId))
+        if (!SessionIdValidator.IsValid(hookEvent.SessionId))
         {
             logger.LogError("Invalid session_id format: contains unsafe characters");
             return 1;
@@ -74,23 +74,23 @@ internal static class HookCommand
             hookEvent.NotificationType);
 
         // Single-line hook log with all payload fields for grep-friendly diagnostics.
-        // Every payload-derived value on this line goes through EscapeLogField. The log is one
+        // Every payload-derived value on this line goes through LogFieldEscaper.Escape. The log is one
         // line per event and is read with grep, so any field carrying CR or LF ends the record
         // early and lets its remainder forge a second line that parses as a genuine hook record
         // (CWE-117). session_id is the one value not escaped here, and only because
         // IsValidSessionId already rejected everything outside [A-Za-z0-9_-] above.
         var parts = new List<string>(8)
         {
-            EscapeLogField(hookEvent.HookEventName)
+            LogFieldEscaper.Escape(hookEvent.HookEventName)
         };
         if (!string.IsNullOrEmpty(hookEvent.NotificationType))
-            parts.Add($"type={EscapeLogField(hookEvent.NotificationType)}");
+            parts.Add($"type={LogFieldEscaper.Escape(hookEvent.NotificationType)}");
         if (!string.IsNullOrEmpty(hookEvent.ToolName))
-            parts.Add($"tool={EscapeLogField(hookEvent.ToolName)}");
+            parts.Add($"tool={LogFieldEscaper.Escape(hookEvent.ToolName)}");
         if (!string.IsNullOrEmpty(hookEvent.Source))
-            parts.Add($"source={EscapeLogField(hookEvent.Source)}");
+            parts.Add($"source={LogFieldEscaper.Escape(hookEvent.Source)}");
         if (!string.IsNullOrEmpty(hookEvent.Message))
-            parts.Add($"msg={EscapeLogField(StateFileModel.TruncateMessage(hookEvent.Message, 80))}");
+            parts.Add($"msg={LogFieldEscaper.Escape(StateFileModel.TruncateMessage(hookEvent.Message, 80))}");
         // background_tasks is a typed property rather than extension data, so it has to be
         // logged explicitly or the diagnostic line silently loses the field (D10). This reads
         // the raw payload value, NOT the degraded roster local built below: an absent field
@@ -105,7 +105,7 @@ internal static class HookCommand
         if (hookEvent.BackgroundTasks is { } payloadTasks)
         {
             var taskTriples = string.Join(",", payloadTasks.Select(
-                t => $"{EscapeLogField(t.Type)}:{EscapeLogField(t.Id)}:{EscapeLogField(t.Status)}"));
+                t => $"{LogFieldEscaper.Escape(t.Type)}:{LogFieldEscaper.Escape(t.Id)}:{LogFieldEscaper.Escape(t.Status)}"));
             parts.Add($"tasks={payloadTasks.Count}[{taskTriples}]");
         }
         // Extension data is the widest opening on this line: it carries whatever undeclared keys
@@ -116,12 +116,12 @@ internal static class HookCommand
         if (hookEvent.ExtensionData is { Count: > 0 })
         {
             foreach (var kv in hookEvent.ExtensionData)
-                parts.Add($"{EscapeLogField(kv.Key)}={EscapeLogField(kv.Value.ToString())}");
+                parts.Add($"{LogFieldEscaper.Escape(kv.Key)}={LogFieldEscaper.Escape(kv.Value.ToString())}");
         }
         var detailStr = string.Join(" ", parts);
         if (!string.IsNullOrEmpty(hookEvent.AgentId))
             logger.LogInformation("Hook: {SessionId} → {Status} ({Details}) [teammate agent={AgentId}]",
-                hookEvent.SessionId, status, detailStr, EscapeLogField(hookEvent.AgentId));
+                hookEvent.SessionId, status, detailStr, LogFieldEscaper.Escape(hookEvent.AgentId));
         else
             logger.LogInformation("Hook: {SessionId} → {Status} ({Details})",
                 hookEvent.SessionId, status, detailStr);
@@ -172,7 +172,7 @@ internal static class HookCommand
             else
             {
                 logger.LogWarning("Teammate hook fired before lead session exists: {SessionId} agent={AgentId}",
-                    hookEvent.SessionId, EscapeLogField(hookEvent.AgentId));
+                    hookEvent.SessionId, LogFieldEscaper.Escape(hookEvent.AgentId));
             }
 
             // Auto-spawn tray if not running (same as lead path).
@@ -323,90 +323,4 @@ internal static class HookCommand
         || (string.Equals(eventName, "SessionStart", StringComparison.OrdinalIgnoreCase)
             && (string.Equals(source, "startup", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(source, "resume", StringComparison.OrdinalIgnoreCase)));
-
-    /// <summary>
-    /// Renders a payload-derived value safe to interpolate into the single-line hook log by
-    /// replacing every control character with a visible escape (<c>\r</c>, <c>\n</c>, otherwise
-    /// <c>\xNN</c>).
-    /// <para>
-    /// The log is one line per hook event and is read with grep, so a field carrying CR or LF
-    /// would end the record early and let the remainder forge a second line that parses as a
-    /// genuine hook record. Every payload-derived token on the line goes through this, and the
-    /// stakes are highest on <c>tasks=</c>: that token is the post-ship trip-wire for roster
-    /// drift (D21, RK5), and a detection control that can be spoofed by its own input fails
-    /// silently — no exception, no test failure (CWE-117).
-    /// </para>
-    /// <para>
-    /// Escaped rather than stripped, deliberately. Stripping produces a clean-looking line and
-    /// destroys the only evidence that something tried to inject one; the escaped form keeps the
-    /// attempt greppable while making it inert.
-    /// </para>
-    /// </summary>
-    private static string EscapeLogField(string? value)
-    {
-        if (string.IsNullOrEmpty(value))
-        {
-            return "";
-        }
-
-        var needsEscape = false;
-        foreach (var c in value)
-        {
-            if (char.IsControl(c))
-            {
-                needsEscape = true;
-                break;
-            }
-        }
-
-        if (!needsEscape)
-        {
-            return value;
-        }
-
-        var sb = new StringBuilder(value.Length + 8);
-        foreach (var c in value)
-        {
-            switch (c)
-            {
-                case '\r':
-                    sb.Append("\\r");
-                    break;
-                case '\n':
-                    sb.Append("\\n");
-                    break;
-                default:
-                    if (char.IsControl(c))
-                    {
-                        sb.Append("\\x").Append(((int)c).ToString("x2"));
-                    }
-                    else
-                    {
-                        sb.Append(c);
-                    }
-
-                    break;
-            }
-        }
-
-        return sb.ToString();
-    }
-
-    /// <summary>
-    /// Validates that a session ID contains only safe filename characters.
-    /// Claude Code uses UUID-format session IDs (alphanumeric + hyphens).
-    /// Rejects path separators, dots-dots, and other unsafe characters to prevent path traversal.
-    /// </summary>
-    private static bool IsValidSessionId(string sessionId)
-    {
-        foreach (var c in sessionId)
-        {
-            if (!char.IsLetterOrDigit(c) && c != '-' && c != '_')
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
 }

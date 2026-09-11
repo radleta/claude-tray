@@ -15,5 +15,10 @@ internal interface ITrayIconRenderer : IDisposable
     /// </summary>
     /// <param name="status">Status name (e.g., "busy", "idle", "attention"). Unknown statuses should return a fallback icon, not throw.</param>
     /// <param name="ageTier">Aging tier 0-4 from StatusMap.GetAgingTier. 0 = fresh, 4 = oldest.</param>
-    Icon GetIcon(string status, int ageTier);
+    /// <param name="disconnected">
+    /// D20: the session's publisher has no live link. Rendered as a separate visual
+    /// dimension (see <see cref="DisconnectedGlyph"/>), never as more aging — the two
+    /// must stay tellable apart, so this is a third cache key and not a sixth tier.
+    /// </param>
+    Icon GetIcon(string status, int ageTier, bool disconnected);
 }

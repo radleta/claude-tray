@@ -263,4 +263,44 @@ public class ConfigReaderTests : IDisposable
         config.Overlay.Enabled.Should().BeTrue();
         config.Overlay.Position.Should().Be("bottom-right");
     }
+
+    [Fact]
+    public void Read_MissingNetworkSection_ReturnsDefaults()
+    {
+        File.WriteAllText(_configPath, """{"tray": {"enabled": true}}""");
+
+        var config = ConfigReader.Read();
+
+        config.Network.MachineName.Should().BeNull();
+        config.Network.AuthKey.Should().BeNull();
+        config.Network.ListenPort.Should().Be(NetworkConfig.DefaultListenPort);
+        config.Network.ListenEnabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Read_NetworkSection_RoundTrips()
+    {
+        File.WriteAllText(_configPath,
+            """{"network": {"machineName": "workstation", "authKey": "s3cret", "listenPort": 51000, "listenEnabled": true}}""");
+
+        var config = ConfigReader.Read();
+
+        config.Network.MachineName.Should().Be("workstation");
+        config.Network.AuthKey.Should().Be("s3cret");
+        config.Network.ListenPort.Should().Be(51000);
+        config.Network.ListenEnabled.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(0, NetworkConfig.MinListenPort)]
+    [InlineData(-9, NetworkConfig.MinListenPort)]
+    [InlineData(70000, NetworkConfig.MaxListenPort)]
+    public void Read_ListenPortOutOfRange_IsClamped(int configured, int expected)
+    {
+        File.WriteAllText(_configPath, "{\"network\": {\"listenPort\": " + configured + "}}");
+
+        var config = ConfigReader.Read();
+
+        config.Network.ListenPort.Should().Be(expected);
+    }
 }

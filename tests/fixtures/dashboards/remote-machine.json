@@ -1,0 +1,46 @@
+{
+  "sessionId": "preview-remote-machine-000000000",
+  "sessionName": "cross-machine-publish",
+  "project": "imrdy",
+  "cwdPath": "/home/me/dev/imrdy",
+  "desktopIndex": 2,
+  "soundPack": null,
+  "wslDistro": "Ubuntu-22.04",
+  "originMachine": "desk2-Ubuntu-22.04",
+  "status": "attention",
+  "lastHookAt": "2026-04-28T12:00:00+00:00",
+  "startedAt": "2026-04-28T11:40:00+00:00",
+  "turnCount": 7,
+  "failureCount": 1,
+  "subagentCount": 0,
+  "currentTool": null,
+  "recentTools": [
+    { "toolName": "Read", "at": "2026-04-28T11:58:00+00:00" },
+    { "toolName": "Edit", "at": "2026-04-28T11:59:00+00:00" },
+    { "toolName": "Bash", "at": "2026-04-28T12:00:00+00:00" }
+  ],
+  "activityTimestamps": [
+    "2026-04-28T11:58:00+00:00",
+    "2026-04-28T11:59:00+00:00",
+    "2026-04-28T12:00:00+00:00"
+  ],
+  "lastPrompt": "Publish the daemon build to the second desktop",
+  "permissionTool": null,
+  "git": {
+    "branch": "feat/cross-machine-publish",
+    "dirtyCount": 3
+  },
+  "fleetItems": [
+    {
+      "sessionId": "preview-remote-machine-000000000",
+      "sessionName": "cross-machine-publish",
+      "status": "attention",
+      "isHovered": true
+    }
+  ],
+  "contextTokens": null,
+  "contextWindowSize": null,
+  "costUsd": null,
+  "modelDisplayName": null,
+  "rateLimits": null
+}

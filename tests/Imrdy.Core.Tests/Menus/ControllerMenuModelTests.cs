@@ -19,6 +19,21 @@ public class ControllerMenuModelTests
     }
 
     [Fact]
+    public void Build_ContainsConnectionsEntryPoint()
+    {
+        var state = MenuTestHelper.EmptyControllerState();
+
+        var items = ControllerMenuModel.Build(state);
+
+        // D26 says the connections window opens from the controller menu, and this is the
+        // only route to it — no CLI command opens the window, so losing this item makes the
+        // whole surface unreachable rather than merely inconvenient.
+        var connections = items.Should().ContainSingle(i => i.Tag == "open-connections").Subject;
+        connections.Enabled.Should().BeTrue();
+        connections.Type.Should().Be(MenuItemType.Item);
+    }
+
+    [Fact]
     public void Build_Header_ShowsImrdy()
     {
         var state = MenuTestHelper.EmptyControllerState();

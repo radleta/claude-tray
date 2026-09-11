@@ -15,6 +15,13 @@ public sealed record DashboardViewModel(
     string? SoundPack,
     string? WslDistro,
 
+    /// <summary>
+    /// The publisher this session arrived from, or null when it originated on this machine.
+    /// This is what D23 renders — <see cref="WslDistro"/> stays carried and unrendered, so the
+    /// dashboard never shows two labels for the same box.
+    /// </summary>
+    string? OriginMachine,
+
     // Live state
     string Status,
     DateTimeOffset LastHookAt,

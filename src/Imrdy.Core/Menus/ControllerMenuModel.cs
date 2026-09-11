@@ -25,6 +25,7 @@ internal static class ControllerMenuModel
 
         items.Add(new MenuItemModel { Type = MenuItemType.Separator });
 
+        items.Add(new MenuItemModel { Label = "Connections…", Tag = "open-connections" });
         items.Add(BuildManageSubmenu(state));
 
         items.Add(new MenuItemModel { Type = MenuItemType.Separator });

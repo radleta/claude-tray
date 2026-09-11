@@ -9,7 +9,7 @@ namespace Imrdy.Windows.Icons;
 
 /// <summary>
 /// Renders tray icons from an SVG-based graphics pack.
-/// Pre-renders all (state, tier) combinations eagerly in the constructor.
+/// Pre-renders all (state, tier, disconnected) combinations eagerly in the constructor.
 /// Falls back gracefully on any render failure — caller should check IsHealthy
 /// and substitute a ParametricShapeRenderer if false (handled by TrayIconRendererFactory).
 /// </summary>
@@ -20,10 +20,10 @@ internal sealed class PackIconRenderer : ITrayIconRenderer
 
     private readonly GraphicsPackLoader.LoadedGraphicsPack _pack;
     private readonly ILogger<PackIconRenderer> _logger;
-    private readonly Dictionary<(string status, int tier), Icon> _cache = new();
+    private readonly Dictionary<(string status, int tier, bool disconnected), Icon> _cache = new();
 
     /// <summary>
-    /// True if all (state, tier) combinations rendered successfully during construction.
+    /// True if all (state, tier, disconnected) combinations rendered successfully during construction.
     /// False means the cache is empty and GetIcon will return a safety-net transparent icon.
     /// TrayIconRendererFactory reads this to decide whether to swap to ParametricShapeRenderer.
     /// </summary>
@@ -47,25 +47,28 @@ internal sealed class PackIconRenderer : ITrayIconRenderer
     }
 
     /// <inheritdoc/>
-    public Icon GetIcon(string status, int ageTier)
+    public Icon GetIcon(string status, int ageTier, bool disconnected)
     {
         if (!IsHealthy)
         {
             return CreateTransparentIcon();
         }
 
-        if (_cache.TryGetValue((status, ageTier), out var icon))
+        if (_cache.TryGetValue((status, ageTier, disconnected), out var icon))
         {
             return icon;
         }
 
-        // Unknown status → try "unknown" fallback, then "idle", then any cached icon
-        if (_cache.TryGetValue(("unknown", ageTier), out var unknownIcon))
+        // Unknown status → try "unknown" fallback, then "idle", then any cached icon.
+        // The disconnected flag is held across every fallback: a substituted glyph must
+        // still carry D20's treatment, or a disconnected session with an unknown status
+        // would silently render as connected.
+        if (_cache.TryGetValue(("unknown", ageTier, disconnected), out var unknownIcon))
         {
             return unknownIcon;
         }
 
-        if (_cache.TryGetValue(("idle", ageTier), out var idleIcon))
+        if (_cache.TryGetValue(("idle", ageTier, disconnected), out var idleIcon))
         {
             return idleIcon;
         }
@@ -76,7 +79,7 @@ internal sealed class PackIconRenderer : ITrayIconRenderer
         {
             foreach (var key in _cache.Keys)
             {
-                if (key.tier == tier)
+                if (key.tier == tier && key.disconnected == disconnected)
                 {
                     return _cache[key];
                 }
@@ -116,17 +119,17 @@ internal sealed class PackIconRenderer : ITrayIconRenderer
                     bitmapForTier = ApplyAgingColorMatrix(baseBitmap, size.Width, size.Height, tier);
                 }
 
-                Icon icon;
                 try
                 {
-                    icon = BitmapToIcon(bitmapForTier);
+                    _cache[(state, tier, false)] = BitmapToIcon(bitmapForTier);
+
+                    using var ghosted = DisconnectedGlyph.Apply(bitmapForTier);
+                    _cache[(state, tier, true)] = BitmapToIcon(ghosted);
                 }
                 finally
                 {
                     bitmapForTier.Dispose();
                 }
-
-                _cache[(state, tier)] = icon;
             }
         }
     }

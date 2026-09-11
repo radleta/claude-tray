@@ -41,6 +41,11 @@ internal sealed class SessionEntry : IDisposable
     /// <summary>Last computed aging tier. Used to avoid unnecessary icon updates.</summary>
     public int LastAgingTier { get; set; } = 0;
 
+    /// <summary>Last rendered D20 disconnected state. Paired with <see cref="LastAgingTier"/>
+    /// so the aging tick redraws when a publisher's link drops or returns without the tier
+    /// having moved — otherwise the treatment would only appear at the next tier boundary.</summary>
+    public bool LastDisconnected { get; set; }
+
     /// <summary>Timestamp of the last state file processed for this session.
     /// Used by sweep to skip re-processing unchanged state files.</summary>
     public DateTimeOffset? LastProcessedTimestamp { get; set; }

@@ -75,6 +75,13 @@ public static class ConfigReader
             // IpcEnabled is intentionally left nullable — null means "use dev-build marker at runtime".
             // Do not collapse it to a concrete bool here.
             Diagnostics = config.Diagnostics ?? new DiagnosticsConfig(),
+            Network = (config.Network ?? new NetworkConfig()) with
+            {
+                ListenPort = Math.Clamp(
+                    config.Network?.ListenPort ?? NetworkConfig.DefaultListenPort,
+                    NetworkConfig.MinListenPort,
+                    NetworkConfig.MaxListenPort),
+            },
         };
     }
 }

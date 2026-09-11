@@ -48,6 +48,7 @@ internal static class CommandRouter
             "packs" => PacksCommand.Run(services, cleanArgs, json),
             "config" => ConfigCommand.Run(services, cleanArgs, json),
             "workspace" => WorkspaceCommand.Run(services, cleanArgs, json),
+            "links" => LinksCommand.Run(services, json),
             "stop" => StopCommand.Run(services),
             "inspect-live" => InspectLiveCommand.Run(cleanArgs),
             "render-live" => RenderLiveCommand.Run(cleanArgs),
@@ -65,6 +66,7 @@ internal static class CommandRouter
         console.MarkupLine("  [green]packs[/]           Manage sound packs");
         console.MarkupLine("  [green]config[/]          Manage configuration");
         console.MarkupLine("  [green]workspace[/]       Manage pinned workspaces");
+        console.MarkupLine("  [green]links[/]           Show cross-machine publisher links and their health");
         console.MarkupLine("  [green]stop[/]            Stop the running tray app");
         console.MarkupLine("  [green]inspect-live[/]    Walk live DashboardForm tree, emit JSON layout + diagnostics (agent diagnostic; tray must be running)");
         console.MarkupLine("  [green]render-live[/]     Render live DashboardForm to PNG (agent diagnostic; tray must be running)");
@@ -123,6 +125,16 @@ internal static class CommandRouter
                 console.MarkupLine("  [green]list[/]              List pinned workspaces");
                 console.MarkupLine("  [green]pin[/] <path> [[--name N]] [[--desktop D]]  Pin a workspace");
                 console.MarkupLine("  [green]unpin[/] <path>      Unpin a workspace");
+                break;
+            case "links":
+                console.MarkupLine("[bold]imrdy links[/]");
+                console.MarkupLine("  Show every registered link in both directions with its state, last delivery and last error.");
+                console.MarkupLine("  [dim]--json[/]  Output the same records as JSON");
+                console.MarkupLine("  Live health comes from the running tray over its diagnostics pipe; with no tray to ask,");
+                console.MarkupLine("  the records in publishers.json are reported instead. Each run says which it did on its [dim]health:[/] line.");
+                console.MarkupLine("  Exits 1 when a link reports Failed [dim](live health only)[/], 2 if the command itself failed, 0 otherwise.");
+                console.MarkupLine("  [dim]So it guards a shell only while a tray answers. The pipe is off unless diagnostics.ipcEnabled is true,[/]");
+                console.MarkupLine("  [dim]so a records-only run is the normal case on a shipped install, not a fault — read the health: line before trusting the exit code.[/]");
                 break;
             case "stop":
                 console.MarkupLine("[bold]imrdy stop[/]");

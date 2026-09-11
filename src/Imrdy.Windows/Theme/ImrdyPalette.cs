@@ -18,9 +18,13 @@ internal static class ImrdyPalette
     private const int DWMSBT_MAINWINDOW              = 2; // Mica
     private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     private const int DWMWCP_ROUND                   = 2;
+    private const int DWMWA_USE_IMMERSIVE_DARK_MODE  = 20;
 
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+    [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+    private static extern int SetWindowTheme(IntPtr hwnd, string subAppName, string? subIdList);
 
     // Colors matching dashboard-ultra.html design.
     // Shared by HoverDashboardFormBase, SessionDashboardForm, WorkspaceDashboardForm, and OverlayPanel.
@@ -72,6 +76,46 @@ internal static class ImrdyPalette
         catch (Exception)
         {
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Forces the window's caption into dark mode, independent of the OS theme. Only a form
+    /// that keeps its native title bar needs this — every other imrdy surface is borderless,
+    /// which is why this arrived with the connections window and not before. Returns true
+    /// when DWM accepted it; false on builds predating the attribute, where the caption
+    /// follows the OS theme as it always did.
+    /// </summary>
+    internal static bool ApplyDarkTitleBar(Form form)
+    {
+        try
+        {
+            var dark = 1;
+            var hr = DwmSetWindowAttribute(form.Handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(int));
+            return hr == 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Puts a control's non-client parts — the scrollbars above all — into the shell's dark
+    /// theme. imrdy's surfaces are dark whatever the OS theme is, and a control that owns a
+    /// scrollbar paints that scrollbar from the OS theme regardless of its own colours: on a
+    /// light-theme machine the connections list showed a white bar across a dark window.
+    /// Silently ignored where uxtheme declines; the control keeps the OS scrollbar it has now.
+    /// </summary>
+    internal static void ApplyDarkScrollbars(Control control)
+    {
+        try
+        {
+            SetWindowTheme(control.Handle, "DarkMode_Explorer", null);
+        }
+        catch (Exception)
+        {
+            // Nothing to recover: this is cosmetic, and the caller has no better option.
         }
     }
 

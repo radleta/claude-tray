@@ -19,6 +19,7 @@ internal static class ControllerMenuBuilder
         Action onExit,
         Action<string>? onLaunchPreview = null,
         Action? onCloseAllPreviews = null,
+        Action? onOpenConnections = null,
         ILogger? logger = null)
     {
         var menu = new ContextMenuStrip();
@@ -37,7 +38,7 @@ internal static class ControllerMenuBuilder
                 var items = ControllerMenuModel.Build(state);
                 MenuRenderer.Apply(menu, items,
                     tag => OnClick(tag, state, onConfigChanged, onSwitchSession, onSwitchWorkspace, onExit,
-                        onLaunchPreview, onCloseAllPreviews, logger),
+                        onLaunchPreview, onCloseAllPreviews, onOpenConnections, logger),
                     logger);
 
                 // The fix (Step 08): ContextMenuStrip.OnOpening pre-sets e.Cancel = true
@@ -77,6 +78,7 @@ internal static class ControllerMenuBuilder
         Action onExit,
         Action<string>? onLaunchPreview,
         Action? onCloseAllPreviews,
+        Action? onOpenConnections,
         ILogger? logger)
     {
         try
@@ -151,6 +153,10 @@ internal static class ControllerMenuBuilder
             else if (tag == "dev-preview-close-all")
             {
                 onCloseAllPreviews?.Invoke();
+            }
+            else if (tag == "open-connections")
+            {
+                onOpenConnections?.Invoke();
             }
             else if (tag == "exit")
             {

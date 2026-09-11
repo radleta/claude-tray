@@ -10,6 +10,7 @@ public record ImrdyConfig
     public SoundConfig Sound { get; init; } = new();
     public OverlayConfig Overlay { get; init; } = new();
     public DiagnosticsConfig Diagnostics { get; init; } = new();
+    public NetworkConfig Network { get; init; } = new();
 }
 
 public record TrayConfig
@@ -65,4 +66,30 @@ public record DiagnosticsConfig
     /// Callers MUST NOT collapse null to a concrete bool in EnsureDefaults; the three-state semantics are intentional.
     /// </summary>
     public bool? IpcEnabled { get; init; } = null;
+}
+
+/// <summary>
+/// Cross-machine publish scalars. Per-publisher records live in publishers.json, not here.
+/// Only the two string fields are nullable, and each states what null means; the rest take
+/// concrete defaults the way <see cref="TrayConfig"/> and <see cref="OverlayConfig"/> do.
+/// <see cref="DiagnosticsConfig.IpcEnabled"/> is this codebase's one deliberate three-state
+/// field and this section does not add a second.
+/// </summary>
+public record NetworkConfig
+{
+    /// <summary>Name this machine publishes under. Null resolves to the hostname at runtime.</summary>
+    public string? MachineName { get; init; } = null;
+
+    /// <summary>Shared key sent in the connect frame. Null means no key is configured.</summary>
+    public string? AuthKey { get; init; } = null;
+
+    /// <summary>TCP port the receiver listens on when <see cref="ListenEnabled"/> is true.</summary>
+    public int ListenPort { get; init; } = DefaultListenPort;
+
+    /// <summary>Whether this machine accepts inbound publisher connections.</summary>
+    public bool ListenEnabled { get; init; } = false;
+
+    public const int DefaultListenPort = 47600;
+    public const int MinListenPort = 1;
+    public const int MaxListenPort = 65535;
 }

@@ -64,6 +64,36 @@ public class DashboardViewModelBuilderTests
     }
 
     [Fact]
+    public void Build_CarriesOriginMachineForRendering_AndLeavesWslDistroUnrendered()
+    {
+        // D23: the dashboard renders the machine name; wsl_distro stays on the view model and
+        // unrendered, so a WSL publisher gets one label, not two.
+        var vm = DashboardViewModelBuilder.Build(
+            CreateState(),
+            startedAt: BaseTime,
+            soundPack: null,
+            desktopIndex: 0,
+            accumulation: CreateAccumulation(),
+            git: null,
+            fleet: Array.Empty<FleetItem>(),
+            now: BaseTime,
+            wslDistro: "Ubuntu",
+            originMachine: "desk2-Ubuntu");
+
+        vm.OriginMachine.Should().Be("desk2-Ubuntu");
+        vm.WslDistro.Should().Be("Ubuntu");
+    }
+
+    [Fact]
+    public void Build_LocalSession_HasNoOriginMachine()
+    {
+        var vm = DashboardViewModelBuilder.Build(
+            CreateState(), BaseTime, null, 0, CreateAccumulation(), null, Array.Empty<FleetItem>(), BaseTime);
+
+        vm.OriginMachine.Should().BeNull();
+    }
+
+    [Fact]
     public void Build_NullSessionName_BecomesEmptyString()
     {
         var state = CreateState() with { SessionName = null };

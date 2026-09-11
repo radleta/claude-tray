@@ -35,17 +35,17 @@ internal sealed class ParametricShapeRenderer : ITrayIconRenderer
     }
 
     /// <inheritdoc/>
-    public Icon GetIcon(string status, int ageTier)
+    public Icon GetIcon(string status, int ageTier, bool disconnected)
     {
         var (r, g, b) = StatusMap.ResolveColor(status);
         var factor = StatusMap.GetAgingFactorFromTier(ageTier);
-        return _cache.GetOrCreate(r, g, b, factor);
+        return _cache.GetOrCreate(r, g, b, factor, disconnected);
     }
 
     /// <inheritdoc/>
     public void Dispose() => _cache.Dispose();
 
-    private Icon CreateIcon(byte r, byte g, byte b, double agingFactor)
+    private Icon CreateIcon(byte r, byte g, byte b, double agingFactor, bool disconnected)
     {
         var size = SystemInformation.SmallIconSize;
         var agedR = (byte)(r * agingFactor);
@@ -62,6 +62,17 @@ internal sealed class ParametricShapeRenderer : ITrayIconRenderer
         var rect = new RectangleF(1, 1, size.Width - 2, size.Height - 2);
         _drawShape(graphics, rect, brush);
 
+        if (!disconnected)
+        {
+            return ToIcon(bitmap);
+        }
+
+        using var ghosted = DisconnectedGlyph.Apply(bitmap);
+        return ToIcon(ghosted);
+    }
+
+    private static Icon ToIcon(Bitmap bitmap)
+    {
         var hIcon = bitmap.GetHicon();
         try
         {

@@ -8,11 +8,13 @@ using Imrdy.Core.Graphics;
 using Imrdy.Core.Hooks;
 using Imrdy.Core.Icons;
 using Imrdy.Core.Menus;
+using Imrdy.Core.Publishing;
 using Imrdy.Core.Sound;
 using Imrdy.Core.State;
 using Imrdy.Core.Status;
 using Imrdy.Core.Tooltip;
 using Imrdy.Core.Workspace;
+using Imrdy.Windows.Connections;
 using Imrdy.Windows.Dashboard;
 using Imrdy.Windows.Desktop;
 using Imrdy.Windows.Diagnostics;
@@ -32,7 +34,7 @@ namespace Imrdy.Windows;
 /// WinForms ApplicationContext that manages the system tray monitor.
 /// Owns FileSystemWatchers, debounce/sweep/stale timers, and session/workspace lifecycle.
 /// </summary>
-internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
+internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter, IConnectionsHost
 {
     private static readonly TimeSpan GracePeriod = TimeSpan.FromSeconds(5);
 
@@ -103,6 +105,25 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
     private readonly WinFormsSoundPlayer _soundPlayer = new();
     private readonly CancellationTokenSource _shutdownCts = new();
     private InspectIpcServer? _inspectIpcServer;
+
+    // --- Cross-machine publish/receive (D30, D9) ---
+    // The tray IS the Windows publisher; there is no headless Windows publisher. It runs off
+    // the session watcher and drain tick it already owns rather than a second FileSystemWatcher
+    // on the same directory, which would double every event.
+    private readonly PublisherStore _publisherStore;
+    private readonly SessionChangeQueue _publishQueue = new();
+    private string _machineName = Environment.MachineName;
+    private SinkRegistry? _sinkRegistry;
+    private SessionPublisher? _sessionPublisher;
+    private WireListener? _wireListener;
+
+    /// <summary>D26's connections window. Created once on first open and reused; hidden on close, never disposed until shutdown.</summary>
+    private ConnectionsForm? _connectionsForm;
+    private NetworkConfig _networkConfig = new();
+
+    // Guards the fire-and-forget drain so only one batch is in flight: the drain tick is the
+    // UI thread and a TCP sink's write must never run on it.
+    private int _publishDrainInFlight;
     private readonly Dictionary<string, ShuffleBag<string>> _soundBags = new();
 
     private bool _soundEnabled = true;
@@ -157,7 +178,8 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
         IDesktopManager desktopManager,
         MonitorOptions options,
         TrayIconRendererFactory rendererFactory,
-        GraphicsPackLoader graphicsPackLoader)
+        GraphicsPackLoader graphicsPackLoader,
+        PublisherStore publisherStore)
     {
         _logger = loggerFactory.CreateLogger<TrayApp>();
         _loggerFactory = loggerFactory;
@@ -170,6 +192,7 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
         _options = options;
         _rendererFactory = rendererFactory;
         _graphicsPackLoader = graphicsPackLoader;
+        _publisherStore = publisherStore;
         _hookAccumulationStore = new HookAccumulationStore();
         _gitCache = new GitInfoCache(loggerFactory);
         _currentIconStyle = StyleNames.NormalizeStyleName(ConfigReader.Read().Tray.IconStyle) ?? "circles";
@@ -203,6 +226,7 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
                 () => ExitThread(),
                 LaunchPreview,
                 CloseAllPreviews,
+                ShowConnectionsWindow,
                 _logger),
         };
 
@@ -225,6 +249,7 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
 
         var startupConfig = ConfigReader.Read();
         _trayEnabled = startupConfig.Tray.Enabled;
+        InitializePublishing(startupConfig);
         var overlayConfig = startupConfig.Overlay;
         _overlayEnabled = overlayConfig.Enabled;
         _overlayConfig = overlayConfig;
@@ -342,6 +367,162 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
         _agingTimer.Start();
     }
 
+    // --- Cross-machine publish / receive ---
+
+    /// <summary>
+    /// Wires the tray as this machine's publisher (D30) and, when configured, as a receiver (D9).
+    /// <para>
+    /// Deliberately no <see cref="SessionDirectoryWatcher"/> and no second timer: the tray already
+    /// watches <see cref="ImrdyPaths.Sessions"/> and drains every 100ms, and a second watcher on
+    /// that directory would double every event. The Core watcher exists for the daemon, which has
+    /// none of this.
+    /// </para>
+    /// </summary>
+    private void InitializePublishing(ImrdyConfig config)
+    {
+        _networkConfig = config.Network;
+        _machineName = MachineNameResolver.Resolve(config.Network.MachineName, Environment.MachineName, null);
+
+        // AuthKey and the snapshot are resolved lazily so a config edit or a session that started
+        // after the tray did is visible to the next dial rather than to the next restart.
+        var sinkContext = new SinkContext(
+            () => _machineName,
+            () => ConfigReader.Read().Network.AuthKey,
+            _stateReader,
+            () => _stateReader.ReadAllStateFiles(ImrdyPaths.Sessions)
+                .Where(SessionPublisher.IsLocallyOwned)
+                .ToList());
+
+        _sinkRegistry = new SinkRegistry(_publisherStore, sinkContext, _logger);
+        _sessionPublisher = new SessionPublisher(ImrdyPaths.Sessions, _stateReader, _sinkRegistry.Current, _logger);
+
+        StartWireListener(config.Network);
+
+        // A TCP sink sends its own snapshot when it dials (D12); a file sink has no connect
+        // moment, so this is what gets already-running sessions to a mount at tray start.
+        if (_sinkRegistry.Current().Count > 0)
+        {
+            var publisher = _sessionPublisher;
+            var token = _shutdownCts.Token;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await publisher.PublishSnapshotAsync(token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Shutdown.
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Publishing the startup session snapshot failed");
+                }
+            }, CancellationToken.None);
+        }
+    }
+
+    private void StartWireListener(NetworkConfig network)
+    {
+        if (!network.ListenEnabled)
+        {
+            return;
+        }
+
+        // The listener writes into the very directory this tray watches, so every ingest comes
+        // back round as a local Changed event — that is D14 working, not a loop. What stops it
+        // re-publishing is D5's null-origin guard in SessionPublisher.IsLocallyOwned: an ingested
+        // file carries origin_machine, so no sink ever sees it again.
+        var listener = new WireListener(
+            network.ListenPort,
+            () => ConfigReader.Read().Network.AuthKey,
+            new SessionIngest(ImrdyPaths.Sessions, _stateReader),
+            _logger);
+
+        if (listener.Start(_shutdownCts.Token))
+        {
+            _wireListener = listener;
+        }
+        else
+        {
+            listener.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Applies a live config reload to the listener. Only a change to the port or to whether we
+    /// listen at all needs the socket rebound; the auth key is read per connection already.
+    /// </summary>
+    private void ApplyNetworkConfig(NetworkConfig network)
+    {
+        var rebind = network.ListenEnabled != _networkConfig.ListenEnabled
+                     || network.ListenPort != _networkConfig.ListenPort;
+
+        _networkConfig = network;
+
+        // D25 covers the whole network section, machineName included. Every sink resolves the
+        // origin through SinkContext rather than capturing it, so re-resolving here is the whole
+        // change: without it a renamed machine kept stamping origin_machine with the old name
+        // until restart, and the far end saw one machine under two.
+        _machineName = MachineNameResolver.Resolve(network.MachineName, Environment.MachineName, null);
+
+        if (!rebind)
+        {
+            return;
+        }
+
+        _wireListener?.Dispose();
+        _wireListener = null;
+        StartWireListener(network);
+
+        _logger.LogInformation(
+            "Inbound publishing {State} on port {Port}",
+            network.ListenEnabled ? "enabled" : "disabled",
+            network.ListenPort);
+    }
+
+    /// <summary>
+    /// Emits one coalesced batch of local session changes off the UI thread. Called from the
+    /// existing 100ms drain tick; a batch already in flight means this tick does nothing and the
+    /// events wait for the next one.
+    /// </summary>
+    private void PumpPublishing()
+    {
+        var publisher = _sessionPublisher;
+        if (publisher is null || _publishQueue.PendingCount == 0)
+        {
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _publishDrainInFlight, 1, 0) != 0)
+        {
+            return;
+        }
+
+        var batch = _publishQueue.Drain();
+        var token = _shutdownCts.Token;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await publisher.DrainAsync(batch, token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Shutdown.
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Publishing a session change batch failed");
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _publishDrainInFlight, 0);
+            }
+        }, CancellationToken.None);
+    }
+
     // --- Sound Config ---
 
     private void LoadSoundConfig()
@@ -369,11 +550,13 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
     {
         _logger.LogDebug("FSW: {ChangeType} {Path}", e.ChangeType, e.Name);
         _pendingChanges.Enqueue(e.FullPath);
+        _publishQueue.Enqueue(Path.GetFileNameWithoutExtension(e.FullPath), SessionChangeKind.Changed);
     }
 
     private void OnSessionFileDeleted(object sender, FileSystemEventArgs e)
     {
         _pendingChanges.Enqueue($"DELETE:{e.FullPath}");
+        _publishQueue.Enqueue(Path.GetFileNameWithoutExtension(e.FullPath), SessionChangeKind.Removed);
     }
 
     private void OnWorkspaceFileChanged(object sender, FileSystemEventArgs e)
@@ -396,6 +579,10 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
             // 100ms tick rather than adding a dedicated timer (same reuse pattern as
             // NotificationDwellState's dwell check). Runs first, unconditionally, every tick.
             SampleForegroundForRestoreTracking();
+
+            // Cross-machine publish rides this same tick rather than a timer of its own; the
+            // emit itself runs off-thread (see PumpPublishing).
+            PumpPublishing();
 
             if (_overlayReloadDeferred && _overlayPanel?.IsDragging != true)
             {
@@ -473,6 +660,19 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
                 {
                     if (_sessions.TryGetValue(notification.SessionId, out var firedEntry))
                     {
+                        // D22: remote sessions go through exactly the same dwell gate as local
+                        // ones — the mute is the escape valve applied here, after the dwell has
+                        // already run, so muting silences a machine without changing when its
+                        // sessions would have notified.
+                        if (IsPublisherMuted(firedEntry))
+                        {
+                            _logger.LogDebug(
+                                "Notification for {SessionId} suppressed — publisher {Machine} is muted",
+                                notification.SessionId,
+                                firedEntry.State.OriginMachine);
+                            continue;
+                        }
+
                         _logger.LogInformation("Dwell fired for {SessionId}: {PreviousStatus} → {Status} (type={NotificationType})",
                             notification.SessionId, notification.PreviousStatus, notification.Status, notification.NotificationType ?? "status-change");
 
@@ -590,12 +790,14 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
 
                 var agingSince = DateTimeOffset.UtcNow - entry.LastSeenAt;
                 var newTier = StatusMap.GetAgingTier(agingSince);
+                var disconnected = IsPublisherDisconnected(entry);
 
-                // Only update icon if aging tier changed (avoid GDI churn)
-                if (newTier != entry.LastAgingTier)
+                // Only update icon if aging tier or link state changed (avoid GDI churn)
+                if (newTier != entry.LastAgingTier || disconnected != entry.LastDisconnected)
                 {
                     entry.LastAgingTier = newTier;
-                    entry.Icon.Icon = GetRendererForStyle(ResolveSessionIconStyle(entry)).GetIcon(entry.EffectiveStatus, newTier);
+                    entry.LastDisconnected = disconnected;
+                    entry.Icon.Icon = GetRendererForStyle(ResolveSessionIconStyle(entry)).GetIcon(entry.EffectiveStatus, newTier, disconnected);
                 }
 
                 // Always update tooltip (status age changes every tick)
@@ -900,6 +1102,14 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
             entry.Dispose();
             RefreshOverlay();
 
+            // The publisher's removal guard has to answer "was this ours?" after the file is
+            // gone, and the watcher event that asks carries only an id. Hand it the origin we
+            // are still holding, right here, before the file goes: a remote session the
+            // publisher never read — one left on disk across a tray restart and then cleared
+            // from the connections window — would otherwise be an unknown, and D4 forbids
+            // guessing "ours" on an unknown.
+            _sessionPublisher?.RecordOwnership(entry.State);
+
             // Delete state file so sweep doesn't resurrect the session
             var statePath = Path.Combine(ImrdyPaths.Sessions, $"{sessionId}.json");
             try
@@ -1174,7 +1384,7 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
 
     private void CreateSessionIcon(SessionEntry entry)
     {
-        var icon = GetRendererForStyle(ResolveSessionIconStyle(entry)).GetIcon(entry.EffectiveStatus, 0);
+        var icon = GetRendererForStyle(ResolveSessionIconStyle(entry)).GetIcon(entry.EffectiveStatus, 0, IsPublisherDisconnected(entry));
 
         entry.Icon = new NotifyIcon
         {
@@ -1307,10 +1517,197 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
         ActivateSession(sessionId);
     }
 
+    /// <summary>
+    /// Opens D26's connections window, creating it once and reusing it after. A second open
+    /// activates the existing window rather than building another — the window is created
+    /// once and shown, activated and hidden, which is the opposite of the hover dashboards'
+    /// recreate-and-dispose-per-show lifecycle and is why this holds a field.
+    /// </summary>
+    private void ShowConnectionsWindow()
+    {
+        // Recreated when it has been disposed rather than reused blindly: showing a disposed
+        // Form throws ObjectDisposedException from Control.CreateHandle, which is a crash in
+        // the menu handler instead of a window. Observed live before ConnectionsForm learned
+        // to cancel a programmatic close as well as a user one.
+        if (_connectionsForm is null || _connectionsForm.IsDisposed)
+        {
+            _connectionsForm = new ConnectionsForm(this, _logger);
+        }
+
+        if (!_connectionsForm.Visible)
+        {
+            _connectionsForm.Show();
+        }
+
+        // A hidden-then-shown window can come back minimized; the operator asked for it, so
+        // it is restored and given focus rather than blinking in the taskbar.
+        if (_connectionsForm.WindowState == FormWindowState.Minimized)
+        {
+            _connectionsForm.WindowState = FormWindowState.Normal;
+        }
+
+        _connectionsForm.Activate();
+    }
+
+    /// <inheritdoc/>
+    ConnectionsViewModel IConnectionsHost.BuildViewModel()
+    {
+        return ConnectionsViewModelBuilder.Build(
+            _publisherStore.Load(),
+            _sinkRegistry?.Health() ?? [],
+            _wireListener?.Health() ?? [],
+            _machineName,
+            _networkConfig.ListenEnabled,
+            _networkConfig.ListenPort,
+            !string.IsNullOrEmpty(_networkConfig.AuthKey),
+            DateTimeOffset.UtcNow);
+    }
+
+    /// <inheritdoc/>
+    void IConnectionsHost.SavePublisher(PublisherEntry entry, string? previousName)
+    {
+        // Add is idempotent on the name, so save is add-then-set rather than a second write
+        // path: PublisherStore's per-field setters are the only mutators, exactly as
+        // WorkspaceStore's are.
+        _publisherStore.Add(entry.Name, entry.Endpoint);
+        _publisherStore.SetDesktopIndex(entry.Name, entry.DesktopIndex);
+        _publisherStore.SetMuted(entry.Name, entry.Muted);
+        _publisherStore.SetEnabled(entry.Name, entry.Enabled);
+
+        // A rename is an upsert under the new name plus a removal of the old one; without the
+        // second half the operator ends up with two records for one machine, the stale one still
+        // holding its own endpoint, desktop mapping, mute and sink. The sessions that arrived
+        // under the old name are left alone — they are still on disk and still that machine's.
+        if (previousName is not null
+            && !string.Equals(previousName, entry.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            _publisherStore.Remove(previousName);
+            _logger.LogInformation("Connections: renamed link {Previous} → {Name}", previousName, entry.Name);
+        }
+
+        // D25 and the acceptance outcome: no restart. SinkRegistry reconciles against the
+        // file on its next Current() call, which the drain tick makes within 100ms.
+        _logger.LogInformation("Connections: saved link {Name} → {Endpoint}", entry.Name, entry.Endpoint ?? "(receive-only)");
+    }
+
+    /// <inheritdoc/>
+    void IConnectionsHost.RemovePublisher(string name)
+    {
+        _publisherStore.Remove(name);
+        ClearSessionsFromMachine(name);
+        _logger.LogInformation("Connections: removed link {Name}", name);
+    }
+
+    /// <inheritdoc/>
+    void IConnectionsHost.ClearMachineSessions(string name) => ClearSessionsFromMachine(name);
+
+    /// <summary>
+    /// D21's cleanup, in place of the time-based expiry the design refuses: drop every session
+    /// this machine delivered. Routed through <see cref="RemoveSession"/> so the icon, the
+    /// dwell state, the cooldown and the state file all go together — a bare file delete would
+    /// leave the tray icon behind until the next sweep.
+    /// </summary>
+    private void ClearSessionsFromMachine(string machineName)
+    {
+        var doomed = _sessions.Values
+            .Where(s => string.Equals(s.State?.OriginMachine, machineName, StringComparison.OrdinalIgnoreCase))
+            .Select(s => s.SessionId)
+            .ToList();
+
+        foreach (var sessionId in doomed)
+        {
+            RemoveSession(sessionId);
+        }
+
+        _logger.LogInformation("Connections: cleared {Count} session(s) from {Machine}", doomed.Count, machineName);
+    }
+
+    /// <summary>
+    /// D22's escape valve: whether this session's publisher is muted. A local session has no
+    /// publisher and is never muted by this route.
+    /// </summary>
+    private bool IsPublisherMuted(SessionEntry entry) =>
+        entry.State.OriginMachine is string origin && _publisherStore.Find(origin)?.Muted == true;
+
+    /// <summary>
+    /// D20: whether this session's publisher has lost its link. The only signal is the
+    /// inbound link's own health — <see cref="WireListener"/> flips a publisher to
+    /// <see cref="SinkState.Failed"/> when its connection drops and leaves the sessions on
+    /// disk, so a session whose machine reads failed is exactly a session with a stale
+    /// last-known state.
+    /// <para>
+    /// A file-sink publisher has no link and so never appears in this table (D27), which is
+    /// correct rather than a gap: there is no connection whose loss could be observed, and
+    /// reporting one as disconnected would be a guess.
+    /// </para>
+    /// </summary>
+    private bool IsPublisherDisconnected(SessionEntry entry)
+    {
+        if (entry.State?.OriginMachine is not string origin) return false;
+        if (_wireListener is null) return false;
+
+        foreach (var link in _wireListener.Health())
+        {
+            if (string.Equals(link.Name, origin, StringComparison.OrdinalIgnoreCase))
+            {
+                return link.State == SinkState.Failed;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// D18: a session that arrived from another machine activates to that publisher's mapped
+    /// desktop and stops there. Nothing travels back to the publisher (D4), and the session's own
+    /// <c>desktop_index</c> is never the source — the ingest merge already discarded the incoming
+    /// number, and the receiver's value means a desktop on *this* box.
+    /// <para>
+    /// A publisher on the receiver's own box is not remote (D19): a WSL distro here has a real
+    /// local terminal worth focusing, so it falls through to the ordinary local path.
+    /// </para>
+    /// </summary>
+    /// <returns>True when the activation was handled as remote and the local path must not run.</returns>
+    private bool TrySwitchToRemoteSessionDesktop(SessionEntry entry)
+    {
+        var origin = entry.State.OriginMachine;
+        if (origin is null || MachineNameResolver.IsSameMachine(origin, Environment.MachineName))
+        {
+            return false;
+        }
+
+        var mapped = _publisherStore.Find(origin)?.DesktopIndex;
+        if (mapped is null)
+        {
+            _logger.LogInformation(
+                "Focus: session={Sid} is on {Machine}, which has no desktop mapping — nothing to switch to",
+                entry.SessionId[..8],
+                origin);
+            return true;
+        }
+
+        if (_desktopManager.IsAvailable)
+        {
+            _logger.LogInformation(
+                "Focus: session={Sid} target=desktop {Target} (source=publisher {Machine})",
+                entry.SessionId[..8],
+                mapped.Value,
+                origin);
+            _desktopManager.SwitchToDesktop(mapped.Value);
+        }
+
+        return true;
+    }
+
     private void SwitchToSessionDesktop(SessionEntry entry)
     {
         try
         {
+            if (TrySwitchToRemoteSessionDesktop(entry))
+            {
+                return;
+            }
+
             // 1. Resolve target desktop index.
             // Pinned index wins; fall through to dynamic lookup only when unset.
             int? target = entry.DesktopIndex;
@@ -1804,14 +2201,15 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
         var agingSince = DateTimeOffset.UtcNow - entry.LastSeenAt;
         var tier = StatusMap.GetAgingTier(agingSince);
         entry.LastAgingTier = tier;
-        entry.Icon.Icon = GetRendererForStyle(ResolveSessionIconStyle(entry)).GetIcon(entry.EffectiveStatus, tier);
+        entry.LastDisconnected = IsPublisherDisconnected(entry);
+        entry.Icon.Icon = GetRendererForStyle(ResolveSessionIconStyle(entry)).GetIcon(entry.EffectiveStatus, tier, entry.LastDisconnected);
         entry.Icon.Text = FormatSessionTooltip(entry);
         RefreshOverlay();
     }
 
     private void CreateWorkspaceIcon(WorkspaceSessionEntry entry)
     {
-        var icon = GetRendererForStyle(StyleNames.NormalizeStyleName(entry.IconStyle) ?? _currentIconStyle).GetIcon("workspace", 0);
+        var icon = GetRendererForStyle(StyleNames.NormalizeStyleName(entry.IconStyle) ?? _currentIconStyle).GetIcon("workspace", 0, disconnected: false);
 
         entry.Icon = new NotifyIcon
         {
@@ -1850,7 +2248,7 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
                 if (entry.Icon is not null)
                     entry.Icon.Icon = GetRendererForStyle(
                         StyleNames.NormalizeStyleName(entry.IconStyle) ?? _currentIconStyle)
-                        .GetIcon("workspace", 0);
+                        .GetIcon("workspace", 0, disconnected: false);
                 // Refresh sessions that inherit from this workspace
                 RefreshAllSessionIcons();
             },
@@ -1877,7 +2275,8 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
             entry.EffectiveStatus,
             age,
             entry.DesktopIndex,
-            entry.SoundPack);
+            entry.SoundPack,
+            entry.State.OriginMachine);
     }
 
     // --- Controller State ---
@@ -2089,6 +2488,8 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
             _logger.LogInformation("Icon style changed to {IconStyle}", newIconStyle);
         }
 
+        ApplyNetworkConfig(config.Network);
+
         var newTrayEnabled = config.Tray.Enabled;
         if (newTrayEnabled != _trayEnabled)
         {
@@ -2235,12 +2636,13 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
             var agingSince = DateTimeOffset.UtcNow - entry.LastSeenAt;
             var tier = StatusMap.GetAgingTier(agingSince);
             entry.LastAgingTier = tier;
-            entry.Icon.Icon = GetRendererForStyle(ResolveSessionIconStyle(entry)).GetIcon(entry.EffectiveStatus, tier);
+            entry.LastDisconnected = IsPublisherDisconnected(entry);
+            entry.Icon.Icon = GetRendererForStyle(ResolveSessionIconStyle(entry)).GetIcon(entry.EffectiveStatus, tier, entry.LastDisconnected);
         }
         foreach (var ws in _workspaces.Values)
         {
             if (ws.Icon is null) continue;
-            ws.Icon.Icon = GetRendererForStyle(StyleNames.NormalizeStyleName(ws.IconStyle) ?? _currentIconStyle).GetIcon("workspace", 0);
+            ws.Icon.Icon = GetRendererForStyle(StyleNames.NormalizeStyleName(ws.IconStyle) ?? _currentIconStyle).GetIcon("workspace", 0, disconnected: false);
         }
     }
 
@@ -2280,7 +2682,8 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
                 IconStyle: ResolveSessionIconStyle(s),
                 AgingTier: s.LastAgingTier,
                 IsVisible: sessionVisible,
-                Label: s.State.Project ?? s.SessionId));
+                Label: s.State.Project ?? s.SessionId,
+                IsDisconnected: IsPublisherDisconnected(s)));
         }
 
         foreach (var ws in _workspaces.Values)
@@ -2460,6 +2863,13 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
                 req, _sessions.Values.ToList(), _hookAccumulationStore, _gitCache, _loggerFactory),
             ["render-live"] = req => RenderLiveHandler.Handle(
                 req, _sessions.Values.ToList(), _hookAccumulationStore, _gitCache, _loggerFactory),
+
+            // r-2: `imrdy links` is a CLI process and holds no sinks, so the only place live
+            // link health exists is here. This is the same join the connections window renders
+            // — one call, no dial, no file walk — which is what keeps it inside the handler's
+            // 2-second UI-thread budget.
+            ["links-live"] = _ => new InspectResponse(
+                "1", "links-live", null, null, null, ((IConnectionsHost)this).BuildViewModel()),
         };
 
         // Test-only: when IMRDY_TEST_HOLD_HANDLE is set, register a "ping" verb whose handler
@@ -2635,6 +3045,16 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter
         _soundPlayer.Dispose();
         _desktopManager.Dispose();
         _inspectIpcServer?.Dispose();
+
+        _connectionsForm?.Dispose();
+        _connectionsForm = null;
+
+        // A TCP sink owns a socket and a dial loop; the registry disposes every sink it holds.
+        _wireListener?.Dispose();
+        _wireListener = null;
+        _sinkRegistry?.Dispose();
+        _sinkRegistry = null;
+
         _shutdownCts.Dispose();
 
         _logger.LogInformation("TrayApp shutdown complete");

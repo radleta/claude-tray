@@ -97,7 +97,7 @@ internal sealed class OverlayPanel : Form
     // _items: OnPaint fires (on first Show) before any UpdateItems/LoadFixtureItems call.
     // _cache: non-nullable field; disposal contract established here; populated via GetOrCreateBitmap.
     private IReadOnlyList<DisplayItem> _items;
-    private Dictionary<(string, string), Bitmap> _cache;
+    private Dictionary<(string style, string status, bool disconnected), Bitmap> _cache;
 
     // Chip container base color (slightly lighter than BgForm to provide a visible
     // chip boundary against the dark panel background).
@@ -189,7 +189,7 @@ internal sealed class OverlayPanel : Form
 
         // Ctor-init both non-nullable fields (CS8618).
         _items = Array.Empty<DisplayItem>();
-        _cache = new Dictionary<(string, string), Bitmap>();
+        _cache = new Dictionary<(string style, string status, bool disconnected), Bitmap>();
 
         // Form shell
         FormBorderStyle = FormBorderStyle.None;
@@ -362,7 +362,7 @@ internal sealed class OverlayPanel : Form
         var glyphSize = size - 2 * ChipPadding;
         if (glyphSize > 0)
         {
-            var glyph     = GetOrCreateBitmap(item.IconStyle, status);
+            var glyph     = GetOrCreateBitmap(item.IconStyle, status, item.IsDisconnected);
             var glyphRect = new Rectangle(chipX + ChipPadding, chipY + ChipPadding, glyphSize, glyphSize);
 
             if (tier <= 3)
@@ -413,7 +413,7 @@ internal sealed class OverlayPanel : Form
         {
             // "circles"/"idle" (green circle) at very low opacity → calm "ready, no sessions" feel.
             // The glyph style can be updated to an imrdy brand icon when one is available.
-            var glyph     = GetOrCreateBitmap("circles", "idle");
+            var glyph     = GetOrCreateBitmap("circles", "idle", disconnected: false);
             var glyphRect = new Rectangle(chipX + ChipPadding, PanelPadding + ChipPadding, glyphSize, glyphSize);
             using var ia  = new ImageAttributes();
             var cm        = new ColorMatrix();
@@ -607,7 +607,7 @@ internal sealed class OverlayPanel : Form
     }
 
     /// <summary>
-    /// Disposes every Bitmap in the (style, status) cache, clears it, and repaints.
+    /// Disposes every Bitmap in the (style, status, disconnected) cache, clears it, and repaints.
     /// Called from TrayApp on icon-style change so the next OnPaint rebuilds glyphs
     /// with the new style.
     /// </summary>
@@ -1019,20 +1019,22 @@ internal sealed class OverlayPanel : Form
     }
 
     // ── Glyph bitmap cache (ported from OverlayWindowBase) ───────────────────────
-    // Key is (style, status) — TIER-INDEPENDENT. Aging is NOT baked into the glyph;
-    // it is expressed purely as chip-background opacity in OnPaint (Decision 7).
+    // Key is (style, status, disconnected) — TIER-INDEPENDENT. Aging is NOT baked into the
+    // glyph; it is expressed purely as chip-background opacity in OnPaint (Decision 7).
+    // D20's disconnected treatment IS baked in, and deliberately so: it is a shape change,
+    // not an opacity change, so it cannot ride the chip-background ladder that carries aging.
     // ApplyAgingColorMatrix, layered-window composite, SetBounds defense, and
     // Visible=false-on-empty are all deleted — they belong to the layered-window path.
 
-    private Bitmap GetOrCreateBitmap(string style, string status)
+    private Bitmap GetOrCreateBitmap(string style, string status, bool disconnected)
     {
-        var key = (style, status);
+        var key = (style, status, disconnected);
         if (_cache.TryGetValue(key, out var cached)) return cached;
 
         Bitmap? bitmap = null;
         try
         {
-            bitmap      = RenderBitmap(style, status);
+            bitmap      = RenderBitmap(style, status, disconnected);
             _cache[key] = bitmap;
             return bitmap;
         }
@@ -1042,23 +1044,33 @@ internal sealed class OverlayPanel : Form
             _logger.LogWarning(ex,
                 "OverlayPanel: failed to render bitmap for style='{Style}' status='{Status}', falling back to circle.",
                 style, status);
-            var fallback = RenderCircleFallback(status);
+            var fallback = RenderCircleFallback(status, disconnected);
             _cache[key]  = fallback;
             return fallback;
         }
     }
 
-    private Bitmap RenderBitmap(string style, string status)
+    private Bitmap RenderBitmap(string style, string status, bool disconnected)
     {
         var size          = _config.Size;
         var shapeDelegate = GetShapeDelegate(style);
-        if (shapeDelegate is not null)
-            return RenderBuiltInShape(shapeDelegate, status, size);
 
-        if (style.StartsWith("pack:", StringComparison.OrdinalIgnoreCase))
-            return RenderFromPack(style, status, size);
+        var glyph = shapeDelegate is not null
+            ? RenderBuiltInShape(shapeDelegate, status, size)
+            : style.StartsWith("pack:", StringComparison.OrdinalIgnoreCase)
+                ? RenderFromPack(style, status, size)
+                : throw new InvalidOperationException($"Unknown icon style '{style}'.");
 
-        throw new InvalidOperationException($"Unknown icon style '{style}'.");
+        if (!disconnected) return glyph;
+
+        try
+        {
+            return DisconnectedGlyph.Apply(glyph);
+        }
+        finally
+        {
+            glyph.Dispose();
+        }
     }
 
     // Aging bake-in DROPPED: GetAgingFactorFromTier call and aged* local vars removed.
@@ -1127,11 +1139,21 @@ internal sealed class OverlayPanel : Form
         }
     }
 
-    private Bitmap RenderCircleFallback(string status)
+    private Bitmap RenderCircleFallback(string status, bool disconnected)
     {
         try
         {
-            return RenderBuiltInShape(ShapeDefinitions.Circle, status, _config.Size);
+            var circle = RenderBuiltInShape(ShapeDefinitions.Circle, status, _config.Size);
+            if (!disconnected) return circle;
+
+            try
+            {
+                return DisconnectedGlyph.Apply(circle);
+            }
+            finally
+            {
+                circle.Dispose();
+            }
         }
         catch (Exception ex)
         {

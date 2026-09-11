@@ -1,6 +1,7 @@
 using Imrdy.Core;
 using Imrdy.Core.Desktop;
 using Imrdy.Core.Graphics;
+using Imrdy.Core.Publishing;
 using Imrdy.Core.Sound;
 using Imrdy.Windows.Desktop;
 using Imrdy.Windows.Icons;
@@ -27,6 +28,12 @@ public static class MonitorServiceBuilder
         services.AddSingleton<IDesktopManager, ComVirtualDesktop>();
         services.AddSingleton<TrayIconRendererFactory>();
         services.AddSingleton<NotificationDwellState>();
+
+        // Explicitly constructed, following the WorkspaceStore precedent in AddCoreServices,
+        // because it takes a file path. Registered here and in DaemonServiceBuilder, never in
+        // HookServiceBuilder: D6 keeps sockets out of the hook's dependency graph.
+        services.AddSingleton(new PublisherStore(ImrdyPaths.Publishers));
+
         services.AddSingleton<TrayApp>();
         return services.BuildServiceProvider();
     }

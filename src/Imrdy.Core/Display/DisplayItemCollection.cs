@@ -58,7 +58,8 @@ public static class DisplayItemCollection
                 x.IconStyle,
                 x.AgingTier,
                 x.IsVisible,
-                x.Label))
+                x.Label,
+                x.IsDisconnected))
             .OrderBy(x => x.DesktopIndex.HasValue ? 0 : 1) // null DesktopIndex last
             .ThenBy(x => x.DesktopIndex ?? 0)
             .ThenBy(x => x.ItemType == DisplayItemType.Session ? 0 : 1) // Session-before-Workspace via explicit map; do not depend on enum ordinal.

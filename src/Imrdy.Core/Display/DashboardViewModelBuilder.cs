@@ -18,7 +18,8 @@ public static class DashboardViewModelBuilder
         GitInfo? git,
         IReadOnlyList<FleetItem> fleet,
         DateTimeOffset now,
-        string? wslDistro = null)
+        string? wslDistro = null,
+        string? originMachine = null)
     {
         _ = now; // reserved for future age-based field derivations; injected for testability
 
@@ -30,6 +31,7 @@ public static class DashboardViewModelBuilder
             DesktopIndex: desktopIndex,
             SoundPack: soundPack,
             WslDistro: wslDistro,
+            OriginMachine: originMachine,
             Status: state.Status,
             LastHookAt: state.Timestamp,
             StartedAt: startedAt,

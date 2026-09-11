@@ -9,4 +9,5 @@ public sealed record DisplayItemInput(
     string IconStyle,
     int AgingTier,
     bool IsVisible,
-    string Label);
+    string Label,
+    bool IsDisconnected = false);

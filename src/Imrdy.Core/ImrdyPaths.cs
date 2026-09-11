@@ -11,7 +11,13 @@ public static class ImrdyPaths
     public static string Config { get; }
     public static string Sessions { get; }
     public static string Workspaces { get; }
-    public static string WslDistros { get; }
+    public static string Publishers { get; }
+
+    /// <summary>
+    /// The Linux daemon's single-instance lock. Its PID file sits beside it as
+    /// <c>daemon.pid</c> — see <see cref="Imrdy.Core.Publishing.DaemonLock"/>.
+    /// </summary>
+    public static string DaemonLock { get; }
     public static string SoundsDir { get; }
     public static string PacksDir { get; }
     public static string GraphicsDir { get; }
@@ -19,6 +25,7 @@ public static class ImrdyPaths
     public static string LogsDir { get; }
     public static string MonitorLog { get; }
     public static string HookLog { get; }
+    public static string DaemonLog { get; }
     public static string DevBuildMarker { get; }
 
     public const string MutexName = @"Global\ImrdyMonitor";
@@ -33,7 +40,8 @@ public static class ImrdyPaths
         Config = Path.Combine(Home, "config.json");
         Sessions = Path.Combine(Home, "sessions");
         Workspaces = Path.Combine(Home, "workspaces.json");
-        WslDistros = Path.Combine(Home, "wsl-distros.json");
+        Publishers = Path.Combine(Home, "publishers.json");
+        DaemonLock = Path.Combine(Home, "daemon.lock");
         SoundsDir = Path.Combine(Home, "sounds");
         PacksDir = Path.Combine(Home, "sounds", "packs");
         GraphicsDir = Path.Combine(Home, "graphics");
@@ -41,6 +49,7 @@ public static class ImrdyPaths
         LogsDir = Path.Combine(Home, "logs");
         MonitorLog = Path.Combine(Home, "logs", "monitor.log");
         HookLog = Path.Combine(Home, "logs", "hook_.log");
+        DaemonLog = Path.Combine(Home, "logs", "daemon_.log");
         DevBuildMarker = Path.Combine(Home, ".dev-build");
     }
 }

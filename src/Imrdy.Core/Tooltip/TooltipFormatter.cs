@@ -12,22 +12,29 @@ public static class TooltipFormatter
     /// Formats a session tooltip.
     /// Unnamed: "project [status 2m] (d1) ~pack"
     /// Named:   "project: session-name [status 2m] (d1) ~pack"
+    /// Remote:  "project@machine: session-name [status 2m] (d1) ~pack"
     /// </summary>
+    /// <param name="originMachine">
+    /// The publisher this session arrived from, or null when it originated here. Rendered right
+    /// after the project so it survives the 63-character cap, which trims from the tail (D23).
+    /// </param>
     public static string FormatSession(
         string project,
         string? sessionName,
         string status,
         TimeSpan age,
         int? desktopIndex,
-        string? packName)
+        string? packName,
+        string? originMachine = null)
     {
         var ageStr = FormatAge(age);
+        var originStr = !string.IsNullOrEmpty(originMachine) ? $"@{originMachine}" : "";
         var desktopStr = desktopIndex.HasValue ? $" (d{desktopIndex.Value + 1})" : "";
         var packStr = !string.IsNullOrEmpty(packName) ? $" ~{packName}" : "";
 
         var tooltip = string.IsNullOrEmpty(sessionName)
-            ? $"{project} [{status} {ageStr}]{desktopStr}{packStr}"
-            : $"{project}: {sessionName} [{status} {ageStr}]{desktopStr}{packStr}";
+            ? $"{project}{originStr} [{status} {ageStr}]{desktopStr}{packStr}"
+            : $"{project}{originStr}: {sessionName} [{status} {ageStr}]{desktopStr}{packStr}";
 
         return Truncate(tooltip);
     }

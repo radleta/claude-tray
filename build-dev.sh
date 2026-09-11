@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build, deploy to ~/.local/bin/, and (on Windows) restart the tray app.
-# Cross-platform: Windows (Git Bash / MSYS) builds Imrdy.Windows; Linux builds
-# Imrdy.Linux (hook-only — no tray to restart).
+# Build, deploy to ~/.local/bin/, and restart the long-running process.
+# Cross-platform: Windows (Git Bash / MSYS) builds Imrdy.Windows and restarts the
+# tray; Linux builds Imrdy.Linux and restarts the publisher daemon.
 # Usage: ./build-dev.sh [rid]
 #   rid defaults to win-x64 on Windows and linux-x64 on Linux.
 set -euo pipefail
@@ -50,8 +50,27 @@ if [[ "$PLATFORM" == "windows" ]]; then
     cp "$PUBLISH_BIN" "$DEST"
     rm -f "$DEST.old"
 else
-    # 3+4. Atomic swap via temp-in-same-dir + mv. Avoids ETXTBSY if a concurrent
-    #      hook process is mid-exec on the old binary.
+    # 3. Stop a running daemon so the new binary is the one that comes back. The PID
+    #    file sits beside the lock file; DaemonLock clears it on a clean exit, so a
+    #    PID here means a daemon was up. TERM lets it release the lock through
+    #    Dispose rather than leaving the kernel to drop it.
+    DAEMON_PID_FILE="$HOME/.imrdy/daemon.pid"
+    DAEMON_WAS_RUNNING=0
+    if [[ -f "$DAEMON_PID_FILE" ]]; then
+        DAEMON_PID=$(cat "$DAEMON_PID_FILE" 2>/dev/null || true)
+        if [[ -n "$DAEMON_PID" ]] && kill -0 "$DAEMON_PID" 2>/dev/null; then
+            DAEMON_WAS_RUNNING=1
+            kill -TERM "$DAEMON_PID" 2>/dev/null || true
+            # Give it a moment to release the lock before the replacement starts.
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+                kill -0 "$DAEMON_PID" 2>/dev/null || break
+                sleep 0.2
+            done
+        fi
+    fi
+
+    # 4. Atomic swap via temp-in-same-dir + mv. Avoids ETXTBSY if a concurrent
+    #    hook process is mid-exec on the old binary.
     TMP="${DEST}.new.$$"
     install -m 0755 "$PUBLISH_BIN" "$TMP"
     mv -f "$TMP" "$DEST"
@@ -78,9 +97,17 @@ printf '%s\n' "$REPO_ROOT" > "$HOME/.imrdy/.dev-build"
 #    from this shell's tree, so the tray survives after build-dev.sh exits
 #    and is not tied to the Claude process that invoked the script.
 #    On Linux there is no tray — the hook binary is invoked per event.
+#    On Linux the daemon is relaunched only if one was already running. A box with no
+#    registered links has nothing to publish, and the hook spawns the daemon on the next
+#    event once links exist — so starting one unconditionally here would leave an idle
+#    process on every machine this script has ever been run on.
 if [[ "$PLATFORM" == "windows" ]]; then
     cmd //c start "" "$DEST" >/dev/null 2>&1
     echo "Deployed and relaunched. (Debug logging enabled via ~/.imrdy/.dev-build)"
+elif [[ "$DAEMON_WAS_RUNNING" == "1" ]]; then
+    "$DEST" daemon >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+    echo "Deployed $DEST ($RID). Daemon relaunched. (Debug logging enabled via ~/.imrdy/.dev-build)"
 else
-    echo "Deployed $DEST ($RID). Hook ready. (Debug logging enabled via ~/.imrdy/.dev-build)"
+    echo "Deployed $DEST ($RID). Hook ready; no daemon was running. (Debug logging enabled via ~/.imrdy/.dev-build)"
 fi

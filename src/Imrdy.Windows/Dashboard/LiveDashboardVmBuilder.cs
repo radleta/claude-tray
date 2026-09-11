@@ -37,7 +37,8 @@ internal static class LiveDashboardVmBuilder
             git: cachedGit,
             fleet: fleet,
             now: now,
-            wslDistro: entry.State.WslDistro);
+            wslDistro: entry.State.WslDistro,
+            originMachine: entry.State.OriginMachine);
     }
 
     /// <summary>

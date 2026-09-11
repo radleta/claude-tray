@@ -69,6 +69,17 @@ public sealed record StateFileModel
     public string? WslDistro { get; init; }
 
     /// <summary>
+    /// The publisher machine a remote session originated on. `null` means the session
+    /// originated on this machine — which is also the publisher's no-re-publish guard,
+    /// so no hook on either side ever writes it. The publisher stamps it on the wire at
+    /// emit time; the receiver writes it during ingest. It is receiver-owned at the
+    /// ingest seam and therefore has no <see cref="Imrdy.Core.Hooks.FieldPreservation"/>
+    /// entry: the hook seam has nothing to preserve.
+    /// </summary>
+    [JsonPropertyName("origin_machine")]
+    public string? OriginMachine { get; init; }
+
+    /// <summary>
     /// Truncates a message to the maximum allowed length.
     /// Port of truncateMessage() from hook-lib.mjs.
     /// </summary>

@@ -67,7 +67,7 @@ public class PackRenderSmokeTest : IDisposable
         _renderer = new PackIconRenderer(_pack, NullLogger<PackIconRenderer>.Instance);
         _renderer.IsHealthy.Should().BeTrue("renderer must be healthy for this assertion to be meaningful");
 
-        var icon = _renderer.GetIcon("idle", 0);
+        var icon = _renderer.GetIcon("idle", 0, disconnected: false);
 
         icon.Should().NotBeNull();
         icon.Size.Should().Be(SystemInformation.SmallIconSize,
@@ -81,8 +81,8 @@ public class PackRenderSmokeTest : IDisposable
         _renderer = new PackIconRenderer(_pack, NullLogger<PackIconRenderer>.Instance);
         _renderer.IsHealthy.Should().BeTrue("renderer must be healthy for this assertion to be meaningful");
 
-        var tier0 = _renderer.GetIcon("idle", 0);
-        var tier4 = _renderer.GetIcon("idle", 4);
+        var tier0 = _renderer.GetIcon("idle", 0, disconnected: false);
+        var tier4 = _renderer.GetIcon("idle", 4, disconnected: false);
 
         tier0.Handle.Should().NotBe(tier4.Handle, "aging tier 4 should produce a visually distinct icon from tier 0");
     }
@@ -94,7 +94,7 @@ public class PackRenderSmokeTest : IDisposable
         _renderer = new PackIconRenderer(_pack, NullLogger<PackIconRenderer>.Instance);
         _renderer.IsHealthy.Should().BeTrue("renderer must be healthy for this assertion to be meaningful");
 
-        var fallback = _renderer.GetIcon("nonexistent_status_xyz", 0);
+        var fallback = _renderer.GetIcon("nonexistent_status_xyz", 0, disconnected: false);
 
         fallback.Should().NotBeNull("unknown statuses must return a fallback icon, not null");
     }

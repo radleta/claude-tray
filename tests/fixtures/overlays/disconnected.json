@@ -1,0 +1,68 @@
+[
+  {
+    "id": "live-fresh",
+    "itemType": 0,
+    "status": "idle",
+    "desktopIndex": 0,
+    "iconStyle": "circles",
+    "agingTier": 0,
+    "isVisible": true,
+    "label": "live-fresh",
+    "isDisconnected": false
+  },
+  {
+    "id": "gone-fresh",
+    "itemType": 0,
+    "status": "idle",
+    "desktopIndex": 0,
+    "iconStyle": "circles",
+    "agingTier": 0,
+    "isVisible": true,
+    "label": "gone-fresh",
+    "isDisconnected": true
+  },
+  {
+    "id": "live-aged",
+    "itemType": 0,
+    "status": "idle",
+    "desktopIndex": 0,
+    "iconStyle": "circles",
+    "agingTier": 4,
+    "isVisible": true,
+    "label": "live-aged",
+    "isDisconnected": false
+  },
+  {
+    "id": "gone-busy",
+    "itemType": 0,
+    "status": "busy",
+    "desktopIndex": 0,
+    "iconStyle": "circles",
+    "agingTier": 0,
+    "isVisible": true,
+    "label": "gone-busy",
+    "isDisconnected": true
+  },
+  {
+    "id": "gone-attention",
+    "itemType": 0,
+    "status": "attention",
+    "desktopIndex": 0,
+    "iconStyle": "squares",
+    "agingTier": 0,
+    "isVisible": true,
+    "label": "gone-attention",
+    "isDisconnected": true
+  },
+  {
+    "id": "gone-plus",
+    "itemType": 0,
+    "status": "permission",
+    "desktopIndex": 0,
+    "iconStyle": "plus",
+    "agingTier": 0,
+    "isVisible": true,
+    "label": "gone-plus",
+    "isDisconnected": true
+  }
+]

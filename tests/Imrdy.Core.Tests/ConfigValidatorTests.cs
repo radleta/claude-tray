@@ -235,4 +235,51 @@ public class ConfigValidatorTests : IDisposable
         result.IsValid.Should().BeTrue(); // warnings only
         result.Errors.Where(e => e.Severity == ValidationSeverity.Warning).Should().HaveCount(3);
     }
+
+    [Fact]
+    public void Validate_AllRealSections_NoUnknownKeyWarnings()
+    {
+        // D33: overlay and diagnostics are real working sections that the known-key sets
+        // used to omit, so `imrdy config validate` reported valid config as suspect.
+        var path = Path.Combine(_tempDir, "config.json");
+        File.WriteAllText(path,
+            """
+            {
+              "tray": {"enabled": true, "iconStyle": "hexagons"},
+              "sound": {"enabled": true, "defaultPack": "assistant"},
+              "overlay": {"enabled": true, "position": "bottom-right", "size": 64, "spacing": 8,
+                          "monitor": 0, "locked": false, "offsetX": 12, "offsetY": 34},
+              "diagnostics": {"ipcEnabled": true},
+              "network": {"machineName": "workstation", "authKey": "k", "listenPort": 47600, "listenEnabled": true}
+            }
+            """);
+
+        var result = _validator.Validate(path, AvailablePacks);
+
+        result.Errors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Validate_UnknownNetworkKey_Warns()
+    {
+        var path = Path.Combine(_tempDir, "config.json");
+        File.WriteAllText(path, """{"network": {"listenPrt": 47600}}""");
+
+        var result = _validator.Validate(path, AvailablePacks);
+
+        result.Errors.Should().ContainSingle()
+            .Which.Message.Should().Contain("network.listenPrt");
+    }
+
+    [Fact]
+    public void Validate_NetworkNotAnObject_Errors()
+    {
+        var path = Path.Combine(_tempDir, "config.json");
+        File.WriteAllText(path, """{"network": 47600}""");
+
+        var result = _validator.Validate(path, AvailablePacks);
+
+        result.Errors.Should().ContainSingle()
+            .Which.Severity.Should().Be(ValidationSeverity.Error);
+    }
 }

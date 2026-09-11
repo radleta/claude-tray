@@ -17,8 +17,8 @@ namespace Imrdy.Integration.Tests.Rendering;
 [Collection("RenderCommandConsole")]
 public class RenderCommandAllTests
 {
-    private const int ExpectedDashboardFixtureCount = 13;
-    private const int ExpectedGlobalFixtureCount    = 19; // 13 dashboard + 2 workspace-dashboard + 4 overlay
+    private const int ExpectedDashboardFixtureCount = 14;
+    private const int ExpectedGlobalFixtureCount    = 23; // 14 dashboard + 2 workspace-dashboard + 5 overlay + 2 connections
 
     /// <summary>
     /// Returns the repo root by walking up from the test binary output directory.
@@ -145,7 +145,8 @@ public class RenderCommandAllTests
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries)
                 .Where(l => l.StartsWith("dashboard/", StringComparison.Ordinal)
                          || l.StartsWith("workspace-dashboard/", StringComparison.Ordinal)
-                         || l.StartsWith("overlay/", StringComparison.Ordinal))
+                         || l.StartsWith("overlay/", StringComparison.Ordinal)
+                         || l.StartsWith("connections/", StringComparison.Ordinal))
                 .ToList();
             lines.Should().HaveCount(ExpectedGlobalFixtureCount,
                 because: "one summary line per fixture across all components must be printed to stdout");

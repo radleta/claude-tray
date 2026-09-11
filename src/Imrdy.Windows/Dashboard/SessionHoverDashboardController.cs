@@ -124,8 +124,13 @@ internal sealed class SessionHoverDashboardController : HoverDashboardController
         var entry = sessions.FirstOrDefault(e => e.SessionId == item.Id);
         if (entry is null) return;
 
+        // A remote session's cwd describes a directory on the publisher, so there is nothing
+        // here to read: git would run against whatever path happens to exist on this machine,
+        // and a UNC value would make the receiver authenticate to a host the peer chose.
         var cachedGit = _gitCache.TryGetCached(entry.State.Cwd);
-        if (cachedGit is not null || string.IsNullOrEmpty(entry.State.Cwd)) return;
+        if (cachedGit is not null
+            || string.IsNullOrEmpty(entry.State.Cwd)
+            || entry.State.OriginMachine is not null) return;
 
         // Git info not cached — kick off async fetch. Marshal back to UI thread via
         // _overlayWindow (long-lived stable control) to avoid cross-thread race on the form.
@@ -176,9 +181,12 @@ internal sealed class SessionHoverDashboardController : HoverDashboardController
             entry, _hookAccumulationStore, cachedGit, sessions, DateTimeOffset.UtcNow);
         UpdateCurrentForm(vm);
 
-        if (cachedGit is not null || string.IsNullOrEmpty(entry.State.Cwd)) return;
+        if (cachedGit is not null
+            || string.IsNullOrEmpty(entry.State.Cwd)
+            || entry.State.OriginMachine is not null) return;
 
-        // Kick off async git fetch if not yet cached — same pattern as OnFormShown.
+        // Kick off async git fetch if not yet cached — same pattern as OnFormShown, remote
+        // sessions included: their cwd is a path on the publisher.
         var cwd = entry.State.Cwd;
         Task.Run(() => _gitCache.FetchAndStore(cwd))
             .ContinueWith(_ =>

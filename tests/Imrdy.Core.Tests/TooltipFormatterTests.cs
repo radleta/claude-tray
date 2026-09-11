@@ -24,6 +24,48 @@ public class TooltipFormatterTests
     }
 
     [Fact]
+    public void FormatSession_RemoteSession_NamesThePublisherAfterTheProject()
+    {
+        var result = TooltipFormatter.FormatSession(
+            "my-project", null, "busy", TimeSpan.FromMinutes(2), 0, "scv", "desk2-ubuntu");
+
+        result.Should().Be("my-project@desk2-ubuntu [busy 2m] (d1) ~scv");
+    }
+
+    [Fact]
+    public void FormatSession_RemoteNamedSession_KeepsBothTheMachineAndTheName()
+    {
+        var result = TooltipFormatter.FormatSession(
+            "my-project", "refactor-auth", "idle", TimeSpan.FromMinutes(5), 1, null, "desk2");
+
+        result.Should().Be("my-project@desk2: refactor-auth [idle 5m] (d2)");
+    }
+
+    [Fact]
+    public void FormatSession_LocalSession_NamesNoMachine()
+    {
+        // The @ marker has to be absent, not empty — a local session must read exactly as it did
+        // before remote sessions existed.
+        var result = TooltipFormatter.FormatSession(
+            "my-project", null, "busy", TimeSpan.FromMinutes(2), 0, "scv", null);
+
+        result.Should().Be("my-project [busy 2m] (d1) ~scv");
+    }
+
+    [Fact]
+    public void FormatSession_LongRemoteTooltip_TrimsTheTailNotTheMachine()
+    {
+        // 63 characters is the NotifyIcon.Text cap and Truncate takes it off the tail, which is
+        // why the machine name sits right after the project rather than at the end.
+        var result = TooltipFormatter.FormatSession(
+            "a-very-long-project-name-that-runs-on", "a-long-session-name-too", "busy",
+            TimeSpan.FromMinutes(2), 0, "scv", "desk2");
+
+        result.Should().HaveLength(63);
+        result.Should().StartWith("a-very-long-project-name-that-runs-on@desk2:");
+    }
+
+    [Fact]
     public void FormatSession_NoDesktop_OmitsDesktop()
     {
         var result = TooltipFormatter.FormatSession(

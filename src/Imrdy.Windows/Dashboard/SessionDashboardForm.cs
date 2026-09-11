@@ -40,6 +40,11 @@ internal sealed class SessionDashboardForm : HoverDashboardFormBase
     private readonly Label _cwdLabel;
     private readonly Label _desktopChip;
 
+    // D23: the publisher a remote session arrived from. Hidden for a local session — this is the
+    // only place a machine name is rendered besides the tooltip; the tray dot and overlay chip
+    // stay unmarked, and WslDistro stays carried on the view model and unrendered.
+    private readonly Label _machineChip;
+
     // Status row
     private readonly Panel _statusPillDot;
     private readonly Label _statusPill;
@@ -147,6 +152,7 @@ internal sealed class SessionDashboardForm : HoverDashboardFormBase
         _projectLabel     = MakeLabel("", 11, ImrdyPalette.FgPrimary, bold: true);
         _cwdLabel         = MakeLabel("", 10, ImrdyPalette.FgMuted, bold: false);
         _desktopChip      = MakeLabel("", 9, ImrdyPalette.FgSecondary, bold: false);
+        _machineChip      = MakeLabel("", 9, ImrdyPalette.FgSecondary, bold: false);
 
         _statusPillDot = new Panel { Width = 6, Height = 6, BackColor = StatusColor("idle") };
         _statusPillDot.Paint += (_, pe) =>
@@ -308,6 +314,19 @@ internal sealed class SessionDashboardForm : HoverDashboardFormBase
         _projectLabel.Text     = vm.Project;
         _cwdLabel.Text         = FrontTruncatePath(vm.CwdPath, 38);
         _desktopChip.Text      = $"Desktop {vm.DesktopIndex + 1}";
+        // Local, not a read-back of _machineChip.Visible: Update runs from the ctor, where the
+        // form is not yet realized, and Control.Visible reports false for every child of an
+        // unshown form no matter what was just assigned.
+        var hasMachine = !string.IsNullOrEmpty(vm.OriginMachine);
+        _machineChip.Text    = vm.OriginMachine ?? "";
+        _machineChip.Visible = hasMachine;
+
+        // The subtitle row is a fixed-width non-wrapping flow, so the machine chip has to take its
+        // space from something or it clips off the right edge. The cwd label already ellipsizes,
+        // which makes it the one control that can give width up without losing information.
+        _cwdLabel.Width = hasMachine
+            ? Math.Max(CwdMinWidth, CwdWidth - _machineChip.PreferredWidth - 8)
+            : CwdWidth;
 
         // --- Status pill ---
         UpdateStatusPill(vm.Status);
@@ -631,7 +650,7 @@ internal sealed class SessionDashboardForm : HoverDashboardFormBase
         // cwd label: already truncated by FrontTruncatePath; cap at 200px so Desktop chip always shows.
         _cwdLabel.AutoSize     = false;
         _cwdLabel.AutoEllipsis = true;
-        _cwdLabel.Width        = 200;
+        _cwdLabel.Width        = CwdWidth;
         _cwdLabel.Height       = 18;
 
         var subtitleRow = new FlowLayoutPanel
@@ -657,9 +676,21 @@ internal sealed class SessionDashboardForm : HoverDashboardFormBase
             using var pen = new Pen(Color.FromArgb(80, 255, 255, 255), 1f);
             pe.Graphics.DrawRectangle(pen, r);
         };
+        _desktopChip.Margin    = new Padding(0, 0, 6, 0);
+        _machineChip.BackColor = Color.FromArgb(15, 255, 255, 255);
+        _machineChip.Padding   = new Padding(5, 1, 5, 1);
+        _machineChip.Visible   = false;
+        _machineChip.Paint += (_, pe) =>
+        {
+            var r = new Rectangle(0, 0, _machineChip.Width - 1, _machineChip.Height - 1);
+            using var pen = new Pen(Color.FromArgb(80, 255, 255, 255), 1f);
+            pe.Graphics.DrawRectangle(pen, r);
+        };
+
         subtitleRow.Controls.Add(_projectLabel);
         subtitleRow.Controls.Add(_cwdLabel);
         subtitleRow.Controls.Add(_desktopChip);
+        subtitleRow.Controls.Add(_machineChip);
 
         panel.Controls.Add(nameRow);
         panel.Controls.Add(subtitleRow);
@@ -927,6 +958,10 @@ internal sealed class SessionDashboardForm : HoverDashboardFormBase
 
     // Maximum number of tool chips to render before appending a "+N more" overflow chip.
     // At 520 px width with ~60px per chip, 8 chips fill the row; cap at 8 and show overflow.
+    /// <summary>Subtitle-row cwd label width, and the floor it may shrink to when the machine chip shares the row.</summary>
+    private const int CwdWidth = 200;
+    private const int CwdMinWidth = 80;
+
     private const int MaxVisibleChips = 8;
 
     private void UpdateChips(IReadOnlyList<RecentToolEntry> tools)

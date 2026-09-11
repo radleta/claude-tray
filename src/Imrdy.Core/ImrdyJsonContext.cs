@@ -5,10 +5,10 @@ using Imrdy.Core.Diagnostics;
 using Imrdy.Core.Display;
 using Imrdy.Core.Graphics;
 using Imrdy.Core.Hooks;
+using Imrdy.Core.Publishing;
 using Imrdy.Core.Sound;
 using Imrdy.Core.State;
 using Imrdy.Core.Workspace;
-using Imrdy.Core.Wsl;
 
 namespace Imrdy.Core;
 
@@ -22,9 +22,6 @@ namespace Imrdy.Core;
 [JsonSerializable(typeof(ImrdyConfig))]
 [JsonSerializable(typeof(WorkspaceConfig))]
 [JsonSerializable(typeof(WorkspaceEntry))]
-[JsonSerializable(typeof(WslDistroConfig))]
-[JsonSerializable(typeof(WslDistroEntry))]
-[JsonSerializable(typeof(List<WslDistroEntry>))]
 [JsonSerializable(typeof(List<string>))]
 [JsonSerializable(typeof(WorkspaceDashboardViewModel))]
 [JsonSerializable(typeof(DashboardViewModel))]
@@ -50,6 +47,14 @@ namespace Imrdy.Core;
 [JsonSerializable(typeof(LayoutNode))]
 [JsonSerializable(typeof(DiagnosticFinding))]
 [JsonSerializable(typeof(DiagnosticsConfig))]
+[JsonSerializable(typeof(NetworkConfig))]
+[JsonSerializable(typeof(PublisherConfig))]
+[JsonSerializable(typeof(WireFrame))]
+[JsonSerializable(typeof(PublisherEntry))]
+[JsonSerializable(typeof(SinkHealth))]
+[JsonSerializable(typeof(List<SinkHealth>))]
+[JsonSerializable(typeof(ConnectionRow))]
+[JsonSerializable(typeof(ConnectionsViewModel))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal partial class ImrdyJsonContext : JsonSerializerContext
 {
