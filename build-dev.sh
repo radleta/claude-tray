@@ -50,22 +50,58 @@ if [[ "$PLATFORM" == "windows" ]]; then
     cp "$PUBLISH_BIN" "$DEST"
     rm -f "$DEST.old"
 else
-    # 3. Stop a running daemon so the new binary is the one that comes back. The PID
-    #    file sits beside the lock file; DaemonLock clears it on a clean exit, so a
-    #    PID here means a daemon was up. TERM lets it release the lock through
-    #    Dispose rather than leaving the kernel to drop it.
+    # 3. Stop a running daemon so the new binary is the one that comes back.
+    #
+    #    Liveness is decided by the LOCK, never by the PID file. The two answer different
+    #    questions: the flock says "a daemon is up", while `kill -0 $pid` says only that
+    #    *some* process this user may signal holds that pid. Those diverge routinely, not
+    #    exceptionally — measured, on SIGTERM the .NET runtime runs the ProcessExit handler
+    #    and then terminates the process at 143 without unwinding Main, so
+    #    DaemonLock.Dispose never runs and daemon.pid is left behind naming a dead pid.
+    #    After a `wsl --terminate` and a distro restart the pid namespace begins again at 1
+    #    while the rootfs keeps that file, so the stale pid can be reused by an unrelated
+    #    same-user process and `kill -0` would happily confirm it. Testing the flock is the
+    #    same authority DaemonLock.IsRunning uses on the C# side, which is the point: one
+    #    source of truth for liveness on both sides, with the PID file demoted to what it
+    #    has always actually been — a convenience for addressing the signal.
+    DAEMON_LOCK_FILE="$HOME/.imrdy/daemon.lock"
     DAEMON_PID_FILE="$HOME/.imrdy/daemon.pid"
     DAEMON_WAS_RUNNING=0
-    if [[ -f "$DAEMON_PID_FILE" ]]; then
+
+    if ! command -v flock > /dev/null 2>&1; then
+        echo "ERROR: flock (util-linux) is required to tell a live daemon from a stale pid file." >&2
+        echo "       Install it, or stop the daemon yourself before rerunning." >&2
+        exit 1
+    fi
+
+    # Non-blocking acquire: it FAILS while a holder is alive, so failure is the liveness
+    # signal. The -f test keeps flock from creating the lock file when none exists.
+    daemon_lock_held() {
+        [[ -f "$DAEMON_LOCK_FILE" ]] || return 1
+        ! flock -n "$DAEMON_LOCK_FILE" true 2>/dev/null
+    }
+
+    if daemon_lock_held; then
         DAEMON_PID=$(cat "$DAEMON_PID_FILE" 2>/dev/null || true)
-        if [[ -n "$DAEMON_PID" ]] && kill -0 "$DAEMON_PID" 2>/dev/null; then
+        # The pid crosses from a file straight into kill's target position, where a leading
+        # "-" is a selector rather than a pid: "-1" means every process this user owns, and
+        # "-1234" means process group 1234. Nothing writes such a value today — the only
+        # writer is Environment.ProcessId — but the value is unvalidated input in an
+        # argument position and the blast radius is the whole login session.
+        if [[ "$DAEMON_PID" =~ ^[1-9][0-9]*$ ]]; then
             DAEMON_WAS_RUNNING=1
             kill -TERM "$DAEMON_PID" 2>/dev/null || true
-            # Give it a moment to release the lock before the replacement starts.
+            # Wait for the LOCK to be released, not for the pid to disappear — the lock is
+            # what the replacement daemon will contend for. Sized against a measurement, not
+            # a guess: a clean SIGTERM exit released it in 203 ms, iteration 2 of 10.
             for _ in 1 2 3 4 5 6 7 8 9 10; do
-                kill -0 "$DAEMON_PID" 2>/dev/null || break
+                daemon_lock_held || break
                 sleep 0.2
             done
+        else
+            echo "WARNING: a daemon holds $DAEMON_LOCK_FILE but $DAEMON_PID_FILE does not" >&2
+            echo "         hold a plain pid, so it cannot be signalled. Leaving it running on" >&2
+            echo "         the old binary; stop it yourself and rerun." >&2
         fi
     fi
 

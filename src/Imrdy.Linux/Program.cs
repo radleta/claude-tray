@@ -121,20 +121,38 @@ internal static class Program
     }
 
     /// <summary>
-    /// Runs the publisher daemon until SIGINT or SIGTERM. Both are handled so a distro
-    /// shutdown releases the lock through <c>Dispose</c> rather than leaving the kernel to
-    /// drop it on process death — which works, but logs nothing and clears no PID file.
+    /// Runs the publisher daemon until SIGINT or SIGTERM. The two do not exit the same way,
+    /// and the difference is measured rather than assumed:
+    /// <list type="bullet">
+    /// <item>SIGINT arrives as <c>CancelKeyPress</c> with <c>e.Cancel = true</c>, so the
+    /// process stays alive, this method unwinds normally, and the lock and PID file are
+    /// released through <c>Dispose</c>.</item>
+    /// <item>SIGTERM is not a <c>CancelKeyPress</c> signal. The runtime raises
+    /// <c>ProcessExit</c> — which is what cancels the token — and then terminates the process
+    /// at exit 143 without unwinding <c>Main</c>. No <c>Dispose</c> runs: the kernel drops the
+    /// <c>flock</c> and <c>daemon.pid</c> is left behind naming a dead pid. Benign, because the
+    /// lock is what liveness is read from on both sides — <c>DaemonLock.IsRunning</c> here and a
+    /// non-blocking <c>flock</c> probe in <c>build-dev.sh</c>. Neither reads the PID file to
+    /// decide whether a daemon is up, and <c>kill -0</c> on that pid is specifically not the
+    /// test: after a <c>wsl --terminate</c> the pid namespace restarts while the rootfs keeps
+    /// the file, so a stale pid can be reused by an unrelated same-user process and would
+    /// confirm. <c>daemon.pid</c> is only how the signal is addressed once the lock has already
+    /// said something is alive.</item>
+    /// </list>
     /// </summary>
     private static int RunDaemon()
     {
         using var cts = new CancellationTokenSource();
 
-        Console.CancelKeyPress += (_, e) =>
+        ConsoleCancelEventHandler onCancelKey = (_, e) =>
         {
             e.Cancel = true;
             cts.Cancel();
         };
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => cts.Cancel();
+        EventHandler onProcessExit = (_, _) => cts.Cancel();
+
+        Console.CancelKeyPress += onCancelKey;
+        AppDomain.CurrentDomain.ProcessExit += onProcessExit;
 
         try
         {
@@ -151,6 +169,19 @@ internal static class Program
             // itself failed, so stderr is the only channel left.
             Console.Error.WriteLine($"imrdy daemon: fatal error: {ex}");
             return 1;
+        }
+        finally
+        {
+            // Both handlers capture the CancellationTokenSource the `using` above disposes on
+            // the way out, and the runtime raises ProcessExit on *every* exit — including the
+            // ordinary return this method has just reached. Left subscribed, the handler fired
+            // against the disposed source and every normal daemon exit ended in an
+            // ObjectDisposedException trace and `Aborted (core dumped)`; the second-instance
+            // path merely returns fast enough to make it obvious. Unsubscribing here is safe
+            // because a cancellation that still matters has already been delivered: the daemon
+            // loop is the only thing the token drives and it has returned.
+            Console.CancelKeyPress -= onCancelKey;
+            AppDomain.CurrentDomain.ProcessExit -= onProcessExit;
         }
     }
 }

@@ -28,7 +28,7 @@ A separate binary with its own, much smaller arm set:
 | Command | Purpose |
 |---------|---------|
 | `imrdy hook` | Same fast path. `LinuxHookEnvironment.EnsureTrayRunning` probes `DaemonLock.IsRunning` and spawns the daemon via `sh -c '... &'` (stdio to `/dev/null`, orphaned to init) only when at least one enabled link exists. Every failure swallowed. |
-| `imrdy daemon` | `DaemonCommand` → `DaemonHost`. The event loop Linux has no `Application.Run` analogue for. SIGINT and SIGTERM both cancel so shutdown releases `daemon.lock` through `Dispose`. Returns an exit code rather than calling `Environment.Exit`. |
+| `imrdy daemon` | `DaemonCommand` → `DaemonHost`. The event loop Linux has no `Application.Run` analogue for. SIGINT and SIGTERM both cancel the token, but only SIGINT unwinds — SIGTERM terminates the process at 143 without running `Dispose`, leaving the kernel to drop `daemon.lock` and `daemon.pid` stale. `RunDaemon` unsubscribes both handlers in a `finally`, because the runtime raises `ProcessExit` after the `using` has disposed the source they capture. Returns an exit code rather than calling `Environment.Exit`. |
 | `imrdy links [--json]` | Plain stdout via `LinksReport.RenderLines` — no Spectre. |
 
 ## State File Lifecycle

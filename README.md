@@ -89,6 +89,18 @@ imrdy --version           Show version
 
 All commands support `--json` for machine consumption.
 
+**On Linux the command set is smaller.** That binary is a publisher, not a monitor, and it ships five arms and no others:
+
+```
+imrdy hook            Process a Claude Code hook event from stdin
+imrdy daemon          Publish this machine's sessions to every enabled link
+imrdy links [--json]  Show this machine's registered links (records only — see below)
+imrdy --version       Show version
+imrdy --help          Show this help
+```
+
+Everything else listed above — `status`, `packs`, `config`, `workspace`, `stop`, `inspect-live`, `render-live` — is Windows-only. `imrdy config path` in particular does not exist on Linux; the paths are the same ones in the table under [Configuration](#configuration), rooted at `~/.imrdy/`. Anything the Linux binary does not recognize prints `unrecognized command` to stderr and exits 1.
+
 ## Sound Packs
 
 Sound packs live in `~/.imrdy/sounds/packs/<pack-name>/`. Each pack has a `pack.json` manifest and event folders containing `.wav` files.
@@ -268,7 +280,7 @@ Sessions running on another box — a second workstation, a WSL distro, a Linux 
 "network": { "listenEnabled": true, "listenPort": 47600, "authKey": "some-shared-secret" }
 ```
 
-**On the publishing machine**, register the receiver in `~/.imrdy/publishers.json`:
+**On the publishing machine**, register the receiver. On a Windows tray that is the Connections window's **Add…** button (see below) — it is the supported route and it takes effect immediately. A headless Linux publisher has no window, so its records go into `~/.imrdy/publishers.json` directly and the daemon picks them up on its next local session event. Either way the record reads:
 
 ```json
 {
@@ -288,7 +300,7 @@ imrdy daemon      # publish this machine's sessions to every enabled link
 
 You rarely start it by hand — the Linux hook spawns it on the next session event, but only when at least one enabled link is registered.
 
-**On the receiving machine**, register the publisher too, so its sessions get a desktop and notification policy. **Give that record an `endpoint` only if this machine also publishes to the other one.** In the one-directional setup above it does not — the publisher connects here, so there is nothing to dial — and the record exists only to carry the desktop mapping and the mute:
+**On the receiving machine**, register the publisher too — again through the Connections window — so its sessions get a desktop and notification policy. **Give that record an `endpoint` only if this machine also publishes to the other one.** In the one-directional setup above it does not — the publisher connects here, so there is nothing to dial — and the record exists only to carry the desktop mapping and the mute:
 
 ```json
 {
@@ -330,7 +342,9 @@ That makes it a shell guard **conditionally**: with live health, a `Failed` link
 - Sessions from a disconnected publisher are never removed automatically. Use **Clear sessions** in the Connections window when you want them gone.
 - The tray tooltip reads `project@machine: session-name …` and the hover dashboard shows a machine chip beside the desktop chip.
 
-`imrdy config set` does not cover the `network.*` keys — edit `~/.imrdy/config.json` directly. Publisher records are managed from the Connections window or by editing `~/.imrdy/publishers.json`.
+`imrdy config set` does not cover the `network.*` keys — edit `~/.imrdy/config.json` directly.
+
+**Publisher records are managed from the Connections window.** Hand-editing `~/.imrdy/publishers.json` is not a supported registration path: nothing watches that file, so a record you add by hand does not start dialing when you save it. The tray notices it only the next time one of this machine's own sessions changes, which may be minutes away or never. `Add…` / `Edit…` / `Remove` in the Connections window take effect immediately; on a headless Linux publisher, where there is no window, the daemon likewise picks a hand-edit up on its next local session event.
 
 ## Configuration
 
