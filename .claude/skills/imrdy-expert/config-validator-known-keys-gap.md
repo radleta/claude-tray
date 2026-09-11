@@ -1,43 +1,44 @@
 ---
 tags: [imrdy-expert/config, imrdy-expert/validation]
-summary: "ConfigValidator.KnownRootKeys only recognizes tray and sound — overlay and diagnostics, both real ImrdyConfig sections, are flagged as unknown-key warnings"
+summary: "ConfigValidator keeps its own known-keys sets, compiler-unenforced — a new config.json section is a three-touch change (ImrdyConfig, EnsureDefaults, ConfigValidator) and step 3 was skipped twice before D33 closed it"
 ---
 
-## ConfigValidator Known-Keys List Lags ImrdyConfig's Actual Sections
+## ConfigValidator's Known-Keys Lists Are a Third, Compiler-Unenforced Touch
 
-`ConfigValidator` (`src/Imrdy.Core/Validation/ConfigValidator.cs:10-27`) maintains its own
-independent `KnownRootKeys` / `KnownTrayKeys` / `KnownSoundKeys` hash sets used by `imrdy config
-validate` to warn on unrecognized JSON keys in `config.json`. `KnownRootKeys` contains only `tray`
-and `sound`:
+`ConfigValidator` (`src/Imrdy.Core/Validation/ConfigValidator.cs`) maintains its own
+independent `KnownRootKeys` / `Known{Section}Keys` hash sets, used by `imrdy config validate`
+to warn on unrecognized JSON keys in `config.json`. Nothing ties them to `ImrdyConfig` at
+compile time.
 
-```csharp
-private static readonly HashSet<string> KnownRootKeys = new(StringComparer.OrdinalIgnoreCase)
-{
-    "tray",
-    "sound",
-};
-```
+**Adding a new top-level config section is a three-touch change**, mirroring the
+`FieldPreservation.PreserveFields` symmetry contract for session state:
 
-But `ImrdyConfig` (`src/Imrdy.Core/ImrdyConfig.cs`) has grown two more top-level sections since —
-`Overlay` and `Diagnostics` — neither added to `ConfigValidator`. A `config.json` with a legitimate
-`"overlay": {...}` or `"diagnostics": {...}` section round-trips correctly through `ConfigReader`
-(which knows about both — see `EnsureDefaults`), but `imrdy config validate` flags either key as
-`Unknown key: 'overlay' (possible typo)` / `Unknown key: 'diagnostics' (possible typo)`. There is no
-`KnownOverlayKeys` or `KnownDiagnosticsKeys` set at all, so even the individual fields inside those
-sections (`enabled`, `position`, `size`, `spacing`, `monitor`, `locked`, `offsetX`, `offsetY`,
-`ipcEnabled`) go unchecked. `ConfigValidatorTests.cs` has no test coverage for either section,
-consistent with the gap being unaddressed rather than intentionally deferred.
+1. Add the record to `ImrdyConfig`
+2. Handle it in `ConfigReader.EnsureDefaults` (defaults, clamps)
+3. Add its key to `ConfigValidator.KnownRootKeys` **plus** a `Known{Section}Keys` set, wired
+   through `TryValidateSection`
 
-**Impact:** Adding a new top-level config section (e.g. a publisher/connections surface) requires a
-three-touch change to stay validated, mirroring the `FieldPreservation.PreserveFields` symmetry
-contract for session state: (1) add the record to `ImrdyConfig`, (2) handle it in
-`ConfigReader.EnsureDefaults`, and (3) add its key set to `ConfigValidator.KnownRootKeys` plus a new
-`Known{Section}Keys` set — step 3 is easy to skip since nothing enforces it at compile time, and the
-existing `overlay`/`diagnostics` gap shows it already has been skipped twice.
+Step 3 is the one that gets skipped, because skipping it still compiles and still round-trips
+correctly through `ConfigReader`. The only symptom is `imrdy config validate` reporting
+`Unknown key: '<section>' (possible typo)` on a legitimate section.
 
-**Source:** [ConfigValidator.cs:10-27](../../../src/Imrdy.Core/Validation/ConfigValidator.cs)
+**History:** it was skipped twice. `KnownRootKeys` held only `tray` and `sound` long after
+`Overlay` and `Diagnostics` shipped, and `tray.iconStyle` was missing from `KnownTrayKeys`.
+D33 (cross-machine-publish) closed all of it while adding `network`: `overlay`, `diagnostics`
+and `network` all have key sets now, `iconStyle` joined the tray set, and the repeated
+per-section unknown-key loop was extracted into one `TryValidateSection` helper — so the
+fourth section costs one call plus one set, not another copy of the loop.
 
-**Discovered:** brainstorming/research — cross-machine session publishing layer investigation (new
-config surfaces question)
-**Impact:** A new config section for cross-machine publishing needs an explicit `ConfigValidator`
-update or it will silently emit spurious "unknown key" warnings on `imrdy config validate` runs.
+**Coverage:** `ConfigValidatorTests` now pins the contract — a config using every real section
+warns about nothing, an unknown key inside a section warns, and a non-object section errors.
+The first of those is the regression test for the gap itself: it fails the moment a new
+`ImrdyConfig` section lands without its key set.
+
+**Source:** [ConfigValidator.cs](../../../src/Imrdy.Core/Validation/ConfigValidator.cs)
+
+**Discovered:** brainstorming/research — cross-machine session publishing layer investigation
+(new config surfaces question). Resolved by D33 in the same build.
+
+**Impact:** The gap that existed at discovery is closed, but the *mechanism* that produced it
+is unchanged — there is still no compile-time link between `ImrdyConfig` and `ConfigValidator`.
+Treat step 3 as part of the definition of "added a config section."

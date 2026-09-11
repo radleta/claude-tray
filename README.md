@@ -16,6 +16,7 @@ Each active Claude Code session gets a colored circle icon in the system tray:
 - **Purple** = permission requested (elicitation dialog)
 - **Yellow** = error (tool or stop failure)
 - Icons age (darken) over time based on last interaction
+- Sessions published from another machine whose link has dropped shrink slightly and get a dashed ring — distinct from the aging dim
 
 Click a session icon to switch to its virtual desktop and focus the terminal window.
 
@@ -44,7 +45,7 @@ irm https://raw.githubusercontent.com/radleta/imrdy/main/install.ps1 | iex
 
 2. **Monitor** (`imrdy` with no args): WinForms system tray app that watches session state files via FileSystemWatcher. Creates/updates/removes tray icons as sessions change.
 
-3. **CLI** (`imrdy status|packs|config|workspace|inspect-live|render-live`): Management commands for checking status, managing sound packs, editing config, pinning workspaces, and live diagnostic inspection of the running tray.
+3. **CLI** (`imrdy status|packs|config|workspace|links|inspect-live|render-live`): Management commands for checking status, managing sound packs, editing config, pinning workspaces, inspecting cross-machine links, and live diagnostic inspection of the running tray.
 
 The tray monitor auto-starts on the first hook event (mutex-gated — only one instance runs). To disable auto-start:
 ```bash
@@ -72,6 +73,10 @@ imrdy config validate     Validate config and workspace files
 imrdy workspace list      List pinned workspaces
 imrdy workspace pin <p>   Pin a workspace (auto-derives name)
 imrdy workspace unpin <p> Unpin a workspace
+
+imrdy links               Show every link, both directions — live health from the running
+                          tray, or publishers.json records when no tray answers
+imrdy links --json        The same view model as JSON
 
 imrdy stop                Stop the tray app (auto-restarts on next hook)
 
@@ -234,6 +239,7 @@ A persistent controller icon (headphones) appears in the system tray whenever th
 - **Overlay** — Toggle overlay window, select position, size, spacing, and monitor; lock its position
 - **Sessions** — View and switch to active sessions
 - **Workspaces** — View and switch to pinned workspaces
+- **Connections…** — Open the cross-machine links window (add, edit, remove links; clear a machine's sessions)
 - **Open Config Folder / Open Sounds Folder / View Log** — Quick access to file locations
 - **Exit** — Shut down the monitor
 
@@ -252,6 +258,80 @@ imrdy integrates with Windows virtual desktops:
 
 Supports Windows 10 (20H1+) and Windows 11 (all versions through 24H2).
 
+## Cross-Machine Sessions
+
+Sessions running on another box — a second workstation, a WSL distro, a Linux server — can show up in this machine's tray beside the local ones. One machine **publishes** its session state; another **receives** it.
+
+**On the receiving machine** (the one with the tray), enable the listener in `~/.imrdy/config.json`:
+
+```json
+"network": { "listenEnabled": true, "listenPort": 47600, "authKey": "some-shared-secret" }
+```
+
+**On the publishing machine**, register the receiver in `~/.imrdy/publishers.json`:
+
+```json
+{
+  "publishers": [
+    { "name": "desk-win", "endpoint": "192.168.1.20:47600", "enabled": true }
+  ]
+}
+```
+
+On a publishing record `endpoint` is required, and is either `host:port` (a TCP link) or a directory path (a file link that writes into the receiver's `sessions/` folder over a mount — handy for WSL, where both sides share a filesystem). It is the thing this machine dials, which is why the receiving side's record omits it — see below. The publisher's `network.authKey` must match the receiver's, and the receiver's firewall must allow the port — imrdy does not create firewall rules for you.
+
+On Linux the publisher is a daemon:
+
+```bash
+imrdy daemon      # publish this machine's sessions to every enabled link
+```
+
+You rarely start it by hand — the Linux hook spawns it on the next session event, but only when at least one enabled link is registered.
+
+**On the receiving machine**, register the publisher too, so its sessions get a desktop and notification policy. **Give that record an `endpoint` only if this machine also publishes to the other one.** In the one-directional setup above it does not — the publisher connects here, so there is nothing to dial — and the record exists only to carry the desktop mapping and the mute:
+
+```json
+{
+  "publishers": [
+    { "name": "build-box", "desktop_index": 2, "muted": false, "enabled": true }
+  ]
+}
+```
+
+Adding an endpoint here when the other machine does not listen makes your tray dial *back* at a machine that is only publishing to it. A Linux publisher daemon never binds a port, so that link sits `Failed` forever and `imrdy links` exits 1 permanently, which defeats using it as a shell guard. With a directory endpoint it is worse: the receiver starts writing its own local sessions into the publisher's sessions folder.
+
+Two Windows trays paired both ways is a supported setup — each is a publisher (the tray publishes) and a receiver (`network.listenEnabled`), and one record per machine legitimately carries both the endpoint you publish to and the `desktop_index` for what arrives from there.
+
+| Field | Meaning |
+|-------|---------|
+| `name` | Machine name. Must match what the other side publishes under (`network.machineName`, defaulting to the hostname, or `<hostname>-<distro>` in WSL) |
+| `endpoint` | **Optional.** `host:port` for TCP, or a directory path for a file link. Omit it entirely for a receive-only record — a machine you receive from but never send to. A record with no endpoint is never dialed; one with an endpoint always is |
+| `desktop_index` | Virtual desktop this machine's sessions activate to — one number per machine, not per session |
+| `muted` | Suppress toasts and sounds from this machine |
+| `enabled` | Set false to keep the record but stop using the link |
+
+**Connections window:** Right-click the controller icon → **Connections…** for a live view of every link in both directions — state, last delivery, last error — with **Add… / Edit… / Remove / Clear sessions** buttons. `Clear sessions` drops the session files that arrived from one machine without removing the link.
+
+**From the shell:**
+
+```bash
+imrdy links           # a table of every link, both directions
+imrdy links --json    # the same view model as JSON
+```
+
+`imrdy links` asks the running tray for live link health over its diagnostics pipe, and falls back to the records in `publishers.json` when no tray answers. Every run states which of the two it did, on its own `health:` line — with `--json` that line goes to stderr, so a pipe into `jq` gets only the payload.
+
+That makes it a shell guard **conditionally**: with live health, a `Failed` link exits 1. Records-only, nothing can report as failed and the run always exits 0. Read the `health:` line before trusting the exit code — the pipe is off unless `diagnostics.ipcEnabled` is `true` in `config.json`, so records-only is the normal case on a shipped install, not a fault. On Linux it is always records-only: live health lives in the Windows tray, which that binary has no path to.
+
+**Behavior of remote sessions:**
+
+- Clicking one switches to its publisher's mapped desktop and stops there — there is no terminal window on this machine to focus. A WSL distro on *this* box is recognized as the same machine and gets ordinary local focusing.
+- When a publisher's link drops, its session icons get a **dashed ring** and shrink slightly — a distinct treatment from the aging dim, so you can tell "stale" from "unreachable" at a glance.
+- Sessions from a disconnected publisher are never removed automatically. Use **Clear sessions** in the Connections window when you want them gone.
+- The tray tooltip reads `project@machine: session-name …` and the hover dashboard shows a machine chip beside the desktop chip.
+
+`imrdy config set` does not cover the `network.*` keys — edit `~/.imrdy/config.json` directly. Publisher records are managed from the Connections window or by editing `~/.imrdy/publishers.json`.
+
 ## Configuration
 
 **File paths:**
@@ -260,9 +340,12 @@ Supports Windows 10 (20H1+) and Windows 11 (all versions through 24H2).
 | Config | `~/.imrdy/config.json` |
 | Session state files | `~/.imrdy/sessions/*.json` |
 | Workspace config | `~/.imrdy/workspaces.json` |
+| Cross-machine links | `~/.imrdy/publishers.json` |
 | Sound packs | `~/.imrdy/sounds/packs/` |
 | Graphics packs | `~/.imrdy/graphics/packs/` |
 | Logs | `~/.imrdy/logs/monitor.log` |
+| Daemon log (Linux) | `~/.imrdy/logs/daemon_*.log` |
+| Daemon lock (Linux) | `~/.imrdy/daemon.lock` + `daemon.pid` |
 
 **Config schema (`~/.imrdy/config.json`):**
 ```json
@@ -270,9 +353,12 @@ Supports Windows 10 (20H1+) and Windows 11 (all versions through 24H2).
   "tray": { "enabled": true, "iconStyle": "dots" },
   "sound": { "enabled": true, "defaultPack": "random", "disabledPacks": [] },
   "overlay": { "enabled": false, "position": "bottom-right", "size": 64, "spacing": 8, "monitor": 0, "locked": false, "offsetX": null, "offsetY": null },
-  "diagnostics": { "ipcEnabled": null }
+  "diagnostics": { "ipcEnabled": null },
+  "network": { "machineName": null, "authKey": null, "listenPort": 47600, "listenEnabled": false }
 }
 ```
+
+`network.machineName` is the name this machine publishes under; `null` resolves to the hostname at runtime (or `<hostname>-<distro>` inside WSL). `network.authKey` is a shared secret both ends must agree on. `network.listenPort` is clamped to 1–65535. See [Cross-Machine Sessions](#cross-machine-sessions).
 
 `diagnostics.ipcEnabled` is a three-state `bool?`. `null` (default — omit from config) means the IPC server starts only when the `~/.imrdy/.dev-build` dev marker exists. Set `true` to enable in production; set `false` to disable even in dev.
 
@@ -304,6 +390,8 @@ Build, deploy to `~/.local/bin/`, and restart the tray app in one step:
 
 This publishes the binary, copies it to `~/.local/bin/imrdy.exe`, and signals the running tray to stop. The next Claude Code hook event auto-spawns the updated binary.
 
+On Linux the same script builds `Imrdy.Linux` to `~/.local/bin/imrdy`, stops a running publisher daemon, swaps the binary, and relaunches the daemon only if one was already running.
+
 For a publish-only build without local deploy:
 
 ```bash
@@ -312,8 +400,9 @@ dotnet publish src/Imrdy.Windows/Imrdy.Windows.csproj -c Release
 
 ## Architecture
 
-- **Imrdy.Core** — Platform-independent: state files, sound system, workspace management, menu models (Build/Apply pattern), validation, DI
+- **Imrdy.Core** — Platform-independent: state files, sound system, workspace management, menu models (Build/Apply pattern), validation, cross-machine publishing (sinks, wire protocol, daemon host), DI
 - **Imrdy.Windows** — WinForms tray app (session icons + controller icon), menu rendering, COM virtual desktop interop, CLI commands, hook command
+- **Imrdy.Linux** — Linux binary: hook, `imrdy daemon` (publisher), `imrdy links`. No UI.
 
 Single executable via PublishSingleFile + SelfContained (no IL trimming — WinForms/COM incompatibility).
 

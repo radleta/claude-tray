@@ -10,7 +10,7 @@ summary: "Seven entry points, timer interactions, field preservation, and state 
 | Command | Class | Purpose |
 |---------|-------|---------|
 | `imrdy hook` | HookCommand | Fast-path: read stdin JSON, derive status, write state file. No WinForms. Lightweight DI via HookServiceBuilder. |
-| `imrdy <cmd>` | CommandRouter | CLI commands (status, packs, config, workspace, stop, inspect-live, render-live). Spectre.Console output. |
+| `imrdy <cmd>` | CommandRouter | CLI commands (status, packs, config, workspace, links, stop, inspect-live, render-live). Spectre.Console output. |
 | `imrdy preview-dashboard <fixture>` | PreviewDashboardCommand | Standalone WinForms dev tool; inline ServiceCollection, bypasses mutex, runs SessionDashboardForm pinned from fixture JSON. |
 | `imrdy render <component> [args]` | RenderCommand | In-process PNG capture of WinForms surfaces; bypasses mutex; sequential STA execution. See [Render Verb Architecture](render-verb-architecture.md). |
 | `imrdy inspect-live <id>` | InspectLiveCommand | Thin CLI client: connects to tray via `Local\ImrdyInspect` pipe, emits walker+analyzer JSON. |
@@ -18,6 +18,18 @@ summary: "Seven entry points, timer interactions, field preservation, and state 
 | `imrdy` | TrayApp | WinForms ApplicationContext. Application.Run with message pump. Full DI via MonitorServiceBuilder. |
 
 The hook runs hundreds of times per session. It must be fast (~50ms). No COM, no WinForms initialization. The `inspect-live` and `render-live` commands are thin clients — all heavy work (walking, rendering) runs inside the already-running tray on the UI thread via `BeginInvoke` + `TaskCompletionSource` bridge. See [Tray IPC](inspect-ipc.md) for protocol details.
+
+**A CLI verb needs two touches in `Program.cs`, not one.** `CommandRouter`'s `switch` is the second; the first is the `args[0] is "status" or "packs" or ... ` pattern that decides whether to take the Spectre branch at all. A verb wired only into `CommandRouter` falls through to the tray fallback and *silently starts a tray* — it prints nothing and exits 0, which does not look like a routing bug. `imrdy links` shipped that way for one build.
+
+## The Linux Binary (src/Imrdy.Linux/Program.cs)
+
+A separate binary with its own, much smaller arm set:
+
+| Command | Purpose |
+|---------|---------|
+| `imrdy hook` | Same fast path. `LinuxHookEnvironment.EnsureTrayRunning` probes `DaemonLock.IsRunning` and spawns the daemon via `sh -c '... &'` (stdio to `/dev/null`, orphaned to init) only when at least one enabled link exists. Every failure swallowed. |
+| `imrdy daemon` | `DaemonCommand` → `DaemonHost`. The event loop Linux has no `Application.Run` analogue for. SIGINT and SIGTERM both cancel so shutdown releases `daemon.lock` through `Dispose`. Returns an exit code rather than calling `Environment.Exit`. |
+| `imrdy links [--json]` | Plain stdout via `LinksReport.RenderLines` — no Spectre. |
 
 ## State File Lifecycle
 

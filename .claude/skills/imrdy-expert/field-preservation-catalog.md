@@ -68,6 +68,16 @@ This contract has no compile-time enforcement. Adding a new tray-persisted field
 
 A missed step 3 produces a silent-loss bug: the tray's write succeeds and the value lands on disk; the next hook event silently overwrites it with `null`.
 
+### The one deliberate non-entry: `OriginMachine`
+
+`StateFileModel.OriginMachine` (`origin_machine`) is a `StateFileModel` field with **no**
+`PreserveFields` entry, and that is correct rather than an audit miss. It never crosses the hook
+seam: the hook never writes it, and the only writer is `SessionIngest` on the *receiving* side,
+which stamps it from the link the payload arrived on and never trusts the value in the payload. A
+session file the hook rewrites is by definition a local session, so there is nothing to preserve.
+Preserving it would be actively wrong — a stale `origin_machine` on a local file makes
+`SessionPublisher.IsLocallyOwned` refuse to publish that session forever.
+
 ## How to audit the catalog
 
 When in doubt about whether a field is racy:

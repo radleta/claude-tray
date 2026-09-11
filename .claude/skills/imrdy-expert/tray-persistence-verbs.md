@@ -37,6 +37,36 @@ Use this page as the diagnostic checklist when a tray-side change "doesn't seem 
 **Failure modes:**
 - `Load()` catches `JsonException` and `IOException` and returns an empty `WorkspaceConfig`. A corrupt or mid-write file appears as "no workspaces" — Pin/Unpin then runs against an empty list and **overwrites** the original. (Unlikely in practice since workspaces.json is atomic-write — but worth knowing for diagnosis.)
 
+## Cross-machine links — `~/.imrdy/publishers.json`
+
+**Entry points:** `PublisherStore` (`src/Imrdy.Core/Publishing/PublisherStore.cs`) — deliberately shaped exactly like `WorkspaceStore`.
+
+| Method | Effect |
+|---|---|
+| `Add(name, endpoint)` | Add or replace a link entry, matched by name |
+| `Remove(name)` | Remove a link entry (no-op if absent) |
+| `SetDesktopIndex(name, idx)` | Update the machine's desktop mapping (null clears it) |
+| `SetMuted(name, muted)` | Update the per-publisher notification mute |
+| `SetEnabled(name, enabled)` | Enable/disable the link without deleting the record |
+
+**Pattern:** Load → mutate → `Save` via `AtomicFileWriter`. Last-writer-wins.
+
+**What triggers it:** the Connections window's Add… / Edit… / Remove buttons, routed through `IConnectionsHost.SavePublisher` / `RemovePublisher` on `TrayApp`.
+
+**Registered in:** `MonitorServiceBuilder`, `DaemonServiceBuilder`, `CliServiceBuilder` — **never** `HookServiceBuilder`. The hook must not carry the publish stack.
+
+**Failure modes:** same as `WorkspaceStore` — `Load()` swallows `JsonException`/`IOException` and returns an empty `PublisherConfig`, so a corrupt file reads as "no links". Unlike `WorkspaceStore`, a corrupt load is *not* overwritten on the next mutate; that is pinned by a test.
+
+## Remote session state — `~/.imrdy/sessions/{session_id}.json` (receiver side)
+
+**Entry point:** `SessionIngest` (`src/Imrdy.Core/Publishing/SessionIngest.cs`) — the single writer of remote session files, shared by `FileSink` (writing into *another* machine's directory over a mount) and `WireListener` (writing into this machine's own).
+
+**Pattern:** `RemoteSessionMerge` then `StateFileReader.WriteStateFile` — a direct write, **never** a rename, since delete-then-move suppresses the receiver's FSW `Changed` event (same reason as [State File Write Path](state-file-write-path.md)).
+
+**Merge rule:** the *receiver* keeps `SoundPack`, `IconStyle` and `DesktopIndex`; an incoming `desktop_index` is discarded; `origin_machine` is stamped by the receiving side and never trusted from the payload.
+
+**Failure modes:** a state file that already carries `origin_machine` must never be re-published — `SessionPublisher.IsLocallyOwned` is the guard, and losing it is an infinite publish loop between two machines rather than a dropped write.
+
 ## Session state — `~/.imrdy/sessions/{session_id}.json`
 
 **Entry point:** `TrayApp.PersistSessionField(SessionEntry, Func<StateFileModel, StateFileModel>)` (`src/Imrdy.Windows/TrayApp.cs:837`)
@@ -64,6 +94,7 @@ Use this page as the diagnostic checklist when a tray-side change "doesn't seem 
 **Entry points:**
 - `TrayApp.RemoveSession(sessionId)` — single-session removal triggered by sweep / SessionEnd grace expiry. Direct `File.Delete` on the state file.
 - `TrayApp.ClearAllSessions()` — manual menu action. Iterates and deletes each state file.
+- `TrayApp.ClearSessionsFromMachine(name)` — Connections window → **Clear sessions**. Deletes every session that arrived under one publisher's name, routed through `RemoveSession` so icon, dwell state, cooldown and file go together. Note that a *disconnected* publisher's sessions are never swept automatically — both cleanup paths key on the state file still existing on disk, and `WireListener` never deletes on disconnect, so this is the only way they go.
 - `StateFileReader.RemoveStateFile(sessionsDir, sessionId)` — utility that deletes both the state file and the `.pid-{sessionId}` cache file.
 
 **Pattern:** Direct delete, swallows `IOException`. No atomicity needed — deletion is idempotent.

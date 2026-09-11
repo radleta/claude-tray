@@ -73,7 +73,8 @@ public sealed record DisplayItem(
     string IconStyle,
     int AgingTier,
     bool IsVisible,
-    string Label);
+    string Label,
+    bool IsDisconnected = false);
 ```
 
 | Field | Type | Meaning |
@@ -86,6 +87,7 @@ public sealed record DisplayItem(
 | `AgingTier` | `int` | 0-4 (0=fresh <1m, 4=oldest 15m+). Drives ColorMatrix desaturation in SVG pack path; RGB multiplier in built-in shape path |
 | `IsVisible` | `bool` | Always true for items returned by `Build()` — items failing visibility are filtered out before returning |
 | `Label` | `string` | Short display label (session name or workspace name) |
+| `IsDisconnected` | `bool` | D20: this item's publisher has no live link. A separate dimension from `AgingTier`, never a sixth tier — `AgingTier` owns opacity, this owns geometry (`DisconnectedGlyph`). Always false for a local session and for a workspace. Defaults to false, so existing positional constructions still compile |
 
 `DisplayItemInput` (`DisplayItemInput.cs`) mirrors these fields exactly — it is the caller-supplied input to `Build()`; `DisplayItem` is the output.
 

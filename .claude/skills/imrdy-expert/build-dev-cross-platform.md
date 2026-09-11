@@ -1,6 +1,6 @@
 ---
 tags: [imrdy-expert/build, imrdy-expert/linux]
-summary: "build-dev.sh already OS-detects and publishes a Linux hook-only binary to ~/.local/bin/imrdy — no tray, atomic swap via temp-in-same-dir + mv"
+summary: "build-dev.sh OS-detects and publishes a Linux binary to ~/.local/bin/imrdy — atomic swap via temp-in-same-dir + mv, plus a SIGTERM/relaunch-if-it-was-running cycle for the publisher daemon"
 ---
 
 ## build-dev.sh Is Already Cross-Platform
@@ -19,21 +19,30 @@ On Windows it publishes `src/Imrdy.Windows/Imrdy.Windows.csproj` to `~/.local/bi
 the running tray (`imrdy stop` + `taskkill //IM imrdy.exe //F`), and relaunches it detached via
 `cmd //c start`.
 
-On Linux it publishes `src/Imrdy.Linux/Imrdy.Linux.csproj` to `~/.local/bin/imrdy` (no `.exe`, no
-tray to stop/relaunch — the comment is explicit: "hook-only — no tray"). The binary swap uses a
-different pattern than Windows' rename-old-then-copy: `install -m 0755 "$PUBLISH_BIN" "${DEST}.new.$$"`
-then `mv -f` the temp file over the destination — an atomic same-directory swap chosen specifically
-to avoid `ETXTBSY` if a concurrent hook process is mid-exec on the old binary (a hazard that does not
-apply on Windows, where a locked `.exe` fails to overwrite instead).
+On Linux it publishes `src/Imrdy.Linux/Imrdy.Linux.csproj` to `~/.local/bin/imrdy` (no `.exe`). The
+binary swap uses a different pattern than Windows' rename-old-then-copy:
+`install -m 0755 "$PUBLISH_BIN" "${DEST}.new.$$"` then `mv -f` the temp file over the destination —
+an atomic same-directory swap chosen specifically to avoid `ETXTBSY` if a concurrent hook process is
+mid-exec on the old binary (a hazard that does not apply on Windows, where a locked `.exe` fails to
+overwrite instead).
+
+There *is* now a long-lived Linux process to cycle: the publisher daemon. The Linux branch reads
+`~/.imrdy/daemon.pid` (written beside `daemon.lock`, and cleared by `DaemonLock` on a clean exit, so
+a live PID there means a daemon was up), sends `SIGTERM` — not `KILL`, so the lock is released
+through `Dispose` rather than dropped by the kernel — polls up to 2s for the process to go, swaps the
+binary, and **relaunches only if one was already running**. That asymmetry with the Windows branch
+(which always respawns the tray) is deliberate: a box with no registered links has nothing to
+publish, and the hook spawns the daemon on the next event once links exist, so an unconditional
+launch would leave an idle process on every machine the script has ever run on.
 
 Both branches drop the same `~/.imrdy/.dev-build` marker file (containing the repo root path) to
 enable Debug logging — this part is platform-agnostic and already shared.
 
-**Impact:** A design adding a Linux publisher daemon does not need to invent OS detection or a Linux
-install path in `build-dev.sh` — both already exist and just need the new daemon's project file
-added to the Linux branch's publish step. CLAUDE.md's `## Build & Test` section documents only the
-single `./build-dev.sh` invocation and does not mention this cross-platform branching, so a reader
-relying on CLAUDE.md alone would miss that Linux support already exists.
+**Impact:** Anything added to Core that the daemon consumes has to be checked against both branches —
+a Windows-only `./build-dev.sh` run proves nothing about the Linux path. CLAUDE.md's `## Build & Test`
+section now documents the branching and the daemon cycle, so it is no longer a CLAUDE.md blind spot;
+this page carries the *why* behind each choice (`ETXTBSY`, `SIGTERM` over `KILL`, conditional
+relaunch).
 
 **Source:** [build-dev.sh](../../../build-dev.sh)
 

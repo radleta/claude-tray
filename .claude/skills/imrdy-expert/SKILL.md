@@ -57,8 +57,8 @@ You are an expert in the imrdy project — a Windows system tray monitor for Cla
 - [scoped-rederivation-leaves-stale-neighbours](scoped-rederivation-leaves-stale-neighbours.md) — Scoping artifact corrections to one source file leaves stale neighbor citations untouched
 - [claude-local-md-is-gitignored-local-memory](claude-local-md-is-gitignored-local-memory.md) — CLAUDE.local.md is gitignored local working memory — it may or may not exist on any given machine, and git status --short will never list it, so any acceptance criterion asserting otherwise is unsatisfiable
 - [mdite-heading-anchor-slugs-drop-inline-code](mdite-heading-anchor-slugs-drop-inline-code.md) — mdite strips inline-code spans (backticks and their contents) from heading text before slugifying, so its anchors diverge from GitHub's — a heading with inline code cannot satisfy both renderers
-- [build-dev-cross-platform](build-dev-cross-platform.md) — build-dev.sh already OS-detects and publishes a Linux hook-only binary to ~/.local/bin/imrdy — no tray, atomic swap via temp-in-same-dir + mv
-- [config-validator-known-keys-gap](config-validator-known-keys-gap.md) — ConfigValidator.KnownRootKeys only recognizes tray and sound — overlay and diagnostics, both real ImrdyConfig sections, are flagged as unknown-key warnings
+- [build-dev-cross-platform](build-dev-cross-platform.md) — build-dev.sh OS-detects and publishes a Linux binary to ~/.local/bin/imrdy — atomic swap via temp-in-same-dir + mv, plus a SIGTERM/relaunch-if-it-was-running cycle for the publisher daemon
+- [config-validator-known-keys-gap](config-validator-known-keys-gap.md) — ConfigValidator keeps its own known-keys sets, compiler-unenforced — a new config.json section is a three-touch change (ImrdyConfig, EnsureDefaults, ConfigValidator) and step 3 was skipped twice before D33 closed it
 
 ## Meta
 

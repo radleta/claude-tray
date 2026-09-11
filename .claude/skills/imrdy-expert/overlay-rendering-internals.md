@@ -20,7 +20,7 @@ DWM native corner rounding is applied via `ImrdyPalette.ApplyRoundedCorners(this
 
 ## Bitmap Cache
 
-`OverlayPanel._cache` is a `Dictionary<(string style, string status), Bitmap>` — one entry per unique (style, status) combination. Aging tier is NOT baked into the cached glyph. Cache is populated lazily; cleared by `InvalidateStyleCache()` (called when the user changes icon styles). Dispose loop runs over `.Values` in both `InvalidateStyleCache` and `Dispose`.
+`OverlayPanel._cache` is a `Dictionary<(string style, string status, bool disconnected), Bitmap>` — one entry per unique (style, status, disconnected) combination. Aging tier is NOT baked into the cached glyph; the disconnected flag IS, because `DisconnectedGlyph` is a geometry change (shrink to 60% + dashed ring) rather than an opacity one. Cache is populated lazily; cleared by `InvalidateStyleCache()` (called when the user changes icon styles). Dispose loop runs over `.Values` in both `InvalidateStyleCache` and `Dispose`.
 
 **Cache miss path**: built-in shape via `GetShapeDelegate` OR pack icon via `RenderFromPack`. Fallback on exception: circle via `RenderCircleFallback`.
 

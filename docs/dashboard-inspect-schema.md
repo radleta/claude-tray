@@ -231,3 +231,41 @@ orphan, never a corrupt PNG at the target path.
 imrdy render-live abc123def456 --output /tmp/live.png
 # stdout: render-live: live.png 520x392
 ```
+
+## links-live verb
+
+`imrdy links` asks the running tray for live cross-machine link health, rather than re-deriving one
+from `publishers.json` records it has no sinks behind (the user's ruling r-2). This verb is not
+reachable as its own CLI command — `imrdy links` is its only caller, and it falls back to
+records-only with exit 0 when no tray answers.
+
+### Request fields
+
+| Field | Type | Notes |
+|---|---|---|
+| `verb` | `"links-live"` | Fixed |
+| `sessionId` | `string` | Unused; send `""` |
+| `outputPath` | `null` | Unused |
+
+### Response fields
+
+On success `links` is populated and `render` / `inspect` are null:
+
+| Field | Type | Notes |
+|---|---|---|
+| `schemaVersion` | `"1"` | Same as the other verbs — a new verb and a new nullable member are additive within major 1 |
+| `verb` | `"links-live"` | Echo |
+| `error` | `null` | Null on success |
+| `links` | `ConnectionsViewModel` | The same live join the connections window renders: `machineName`, `listenEnabled`, `listenPort`, `authKeyConfigured`, and one `rows[]` entry per machine carrying both directions' `SinkHealth` |
+| `render` / `inspect` | `null` | Always null for links-live |
+
+`links` is null on every other verb's response, which is why the member carries a default: the
+existing construction sites are untouched.
+
+### The fallback is the normal production path
+
+The pipe is gated on `diagnostics.ipcEnabled ?? File.Exists(~/.imrdy/.dev-build)`, so a shipped
+install has no server unless the operator sets `diagnostics.ipcEnabled: true`. `imrdy links` treats
+the absence as a state, not an error: it prints the records from `publishers.json`, exits 0, and
+says which of the two it did on its `health:` line (stderr under `--json`). Exit 1 for a `Failed`
+link is reachable only from a live response.

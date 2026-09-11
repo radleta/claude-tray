@@ -8,13 +8,23 @@ code-cites: []
 
 ## Overview
 
-`imrdy render <component> [--output <path> | --output-dir <dir>]` produces deterministic PNG artifacts of WinForms UI surfaces without a live screen or running tray process. Two registered components: `dashboard` (`SessionDashboardForm` rendered from a `DashboardViewModel` fixture JSON) and `overlay` (`OverlayPanel` rendered from one of four overlay fixture files), both via `Form.DrawToBitmap`.
+`imrdy render <component> [--output <path> | --output-dir <dir>]` produces deterministic PNG artifacts of WinForms UI surfaces without a live screen or running tray process. Four registered components (`RenderRegistry.Components`), all via `Form.DrawToBitmap`:
+
+| Component | Form | Fixture directory |
+|-----------|------|-------------------|
+| `dashboard` | `SessionDashboardForm` | `tests/fixtures/dashboards` (14) |
+| `workspace-dashboard` | `WorkspaceDashboardForm` | `tests/fixtures/workspace-dashboards` (2) |
+| `overlay` | `OverlayPanel` | `tests/fixtures/overlays` (5) |
+| `connections` | `ConnectionsForm` via `NullConnectionsHost` | `tests/fixtures/connections` (2) |
+
+`imrdy render --all` therefore produces **23** PNGs. `ConnectionsRenderer` pins an explicit `ClientSize` because that window is resizable, unlike the other three.
 
 Key commands:
-- `imrdy render dashboard <fixture.json>` — render a single dashboard fixture
-- `imrdy render overlay <fixture.json>` — render a single overlay fixture
+- `imrdy render <component> <fixture.json>` — render a single fixture
 - `imrdy render --list` — enumerate registered components
 - `imrdy render --all [--output-dir <dir>]` — render every fixture of every component
+
+**Adding a fixture or a component is a two-place change.** `RenderCommandAllTests` hardcodes the per-component fixture counts *and* a summary-line prefix filter. Miss the filter and the PNG assertion passes while the summary-line assertion fails by exactly the new fixture count — which reads as "the renders did not run" when they did.
 
 ## Layer Split (D1)
 
