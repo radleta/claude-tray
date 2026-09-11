@@ -94,6 +94,37 @@ public class ConnectionsFormTests
     }
 
     [Fact]
+    public void NoLinks_SaysSo_RatherThanDrawingAnEmptyTableUnderPopulatedHeaders()
+    {
+        // Both CLI surfaces tell an operator with no links that they have none; the window
+        // drew bare headers over blank space, which reads as a failure to load. The form is
+        // shown because Control.Visible's getter walks the parent chain, so every child of an
+        // unrealized form reports false no matter what was assigned.
+        using var form = NewForm();
+        form.Show();
+
+        var list = form.Controls.OfType<ListView>().Single();
+        var empty = list.Controls.OfType<Label>()
+            .Should().ContainSingle(l => l.Text == ConnectionRowFormatter.NoLinks).Subject;
+        empty.Visible.Should().BeTrue();
+        empty.Top.Should().BeGreaterThan(0,
+            "it sits below the column headers, which stay visible");
+    }
+
+    [Fact]
+    public void Links_HideTheEmptyState_SoItNeverCoversTheFirstRows()
+    {
+        using var form = NewForm(new ConnectionsViewModel("box", true, 47600, AuthKeyConfigured: true, [
+            new ConnectionRow("alpha", "1.2.3.4:47600", true, true, false, null, null, null, "never"),
+        ]));
+        form.Show();
+
+        form.Controls.OfType<ListView>().Single().Controls.OfType<Label>()
+            .Single(l => l.Text == ConnectionRowFormatter.NoLinks)
+            .Visible.Should().BeFalse();
+    }
+
+    [Fact]
     public void GrowingTheWindow_StretchesTheListAndKeepsTheButtonsOnScreen()
     {
         // "Resizes" is half the acceptance outcome, and growing is the half that broke: the

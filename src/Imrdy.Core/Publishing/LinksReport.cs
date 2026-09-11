@@ -128,7 +128,7 @@ public static class LinksReport
 
         if (vm.Rows.Count == 0)
         {
-            lines.Add("No links registered.");
+            lines.Add(ConnectionRowFormatter.NoLinks);
             return lines;
         }
 

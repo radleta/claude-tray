@@ -31,6 +31,13 @@ internal sealed class ConnectionsForm : Form
     private const int RefreshIntervalMs = 1000;
     private const int CornerRadius = 14;
 
+    /// <summary>
+    /// How far the empty-state label sits below the list's top edge. A <see cref="ListView"/>
+    /// draws its column header inside its own client area, so an overlay pinned to the list's
+    /// origin would cover the headers this empty state exists to keep visible.
+    /// </summary>
+    private const int ListHeaderHeight = 26;
+
     private static readonly Color BgRow = Color.FromArgb(34, 36, 46);
     private static readonly Color BgHeader = Color.FromArgb(22, 24, 32);
     private static readonly Color FgOk = Color.FromArgb(70, 200, 120);
@@ -43,6 +50,7 @@ internal sealed class ConnectionsForm : Form
     private readonly Label _title = new();
     private readonly Label _subtitle = new();
     private readonly ListView _list = new();
+    private readonly Label _emptyState = new();
     private readonly Button _addButton = new();
     private readonly Button _editButton = new();
     private readonly Button _removeButton = new();
@@ -98,6 +106,7 @@ internal sealed class ConnectionsForm : Form
         _subtitle.ForeColor = vm.ListenEnabled && !unauthenticated ? ImrdyPalette.FgSecondary : FgBad;
 
         var selected = SelectedName();
+        _emptyState.Visible = vm.Rows.Count == 0;
 
         _list.BeginUpdate();
         try
@@ -275,6 +284,25 @@ internal sealed class ConnectionsForm : Form
         _list.DrawSubItem += OnDrawSubItem;
         _list.SelectedIndexChanged += (_, _) => UpdateButtonState();
         _list.DoubleClick += (_, _) => EditSelected();
+
+        // Overlaid on the list's body rather than shown instead of the list, so the column
+        // headers stay put: the operator sees an empty table, not a missing one. Same sentence
+        // the two CLI surfaces print, from the one place that owns it.
+        //
+        // It is a child of the list, not a sibling on the form: a ListView is a native control
+        // with its own window, so a sibling label overlapping it is painted underneath it no
+        // matter where it sits in the form's z-order. Parenting it to the list puts it above
+        // the list's own surface, which is the only placement that actually shows.
+        _emptyState.Text = ConnectionRowFormatter.NoLinks;
+        _emptyState.Font = new Font("Segoe UI", 9f);
+        _emptyState.ForeColor = ImrdyPalette.FgMuted;
+        _emptyState.BackColor = BgRow;
+        _emptyState.TextAlign = ContentAlignment.MiddleCenter;
+        _emptyState.Location = new Point(0, ListHeaderHeight);
+        _emptyState.Size = new Size(_list.ClientSize.Width, 44);
+        _emptyState.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        _emptyState.Visible = false;
+        _list.Controls.Add(_emptyState);
 
         StyleButton(_addButton, "Add…", 16);
         StyleButton(_editButton, "Edit…", 100);

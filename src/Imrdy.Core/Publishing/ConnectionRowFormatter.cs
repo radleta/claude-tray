@@ -15,6 +15,15 @@ public static class ConnectionRowFormatter
     public const string None = "—";
 
     /// <summary>
+    /// What every surface says when there are no links at all. Both CLI surfaces already told
+    /// the operator this; the connections window drew an empty list under populated headers,
+    /// which reads as a failure to load rather than as a true empty state. The wording lives
+    /// here for the same reason every other cell's does — three copies of a sentence is how
+    /// three surfaces start saying three different things.
+    /// </summary>
+    public const string NoLinks = "No links registered.";
+
+    /// <summary>
     /// Three different absences, kept apart, because they need three different actions from
     /// the operator: a machine with no record at all (legitimate — a receiver holds no
     /// allow-list, D24), a record that deliberately carries no endpoint because it is

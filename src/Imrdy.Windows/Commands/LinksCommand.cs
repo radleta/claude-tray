@@ -205,7 +205,7 @@ internal static class LinksCommand
 
         if (vm.Rows.Count == 0)
         {
-            console.MarkupLine("[dim]No links registered.[/]");
+            console.MarkupLine($"[dim]{Markup.Escape(ConnectionRowFormatter.NoLinks)}[/]");
             return;
         }
 
