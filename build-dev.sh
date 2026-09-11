@@ -54,10 +54,11 @@ else
     #
     #    Liveness is decided by the LOCK, never by the PID file. The two answer different
     #    questions: the flock says "a daemon is up", while `kill -0 $pid` says only that
-    #    *some* process this user may signal holds that pid. Those diverge routinely, not
-    #    exceptionally — measured, on SIGTERM the .NET runtime runs the ProcessExit handler
-    #    and then terminates the process at 143 without unwinding Main, so
-    #    DaemonLock.Dispose never runs and daemon.pid is left behind naming a dead pid.
+    #    *some* process this user may signal holds that pid. SIGTERM is now intercepted by a
+    #    PosixSignalRegistration in RunDaemon, so a clean stop unwinds Main and
+    #    DaemonLock.Dispose removes daemon.pid itself — but every abnormal exit still leaves
+    #    that file behind naming a dead pid: SIGKILL, a `wsl --terminate`, a crash. The lock
+    #    is the authority on both paths, which is why it is tested rather than the pid.
     #    After a `wsl --terminate` and a distro restart the pid namespace begins again at 1
     #    while the rootfs keeps that file, so the stale pid can be reused by an unrelated
     #    same-user process and `kill -0` would happily confirm it. Testing the flock is the
@@ -81,6 +82,20 @@ else
         ! flock -n "$DAEMON_LOCK_FILE" true 2>/dev/null
     }
 
+    # The ONE refusal path. Both ways a stop can fail end here: the daemon refusing to die,
+    # and a held lock whose holder cannot be addressed. They differ only in the reason, so
+    # they must not grow two exits — the property that matters is identical, and it is the
+    # behaviour this script is held to: never report success it did not achieve. Called only
+    # before the swap, so a refusal leaves no new binary on disk and prints no success line.
+    refuse_deploy() {
+        echo "ERROR: $1" >&2
+        echo "       Refusing to deploy: swapping the binary now would leave the old daemon" >&2
+        echo "       running while this script reported a successful deploy, and you would" >&2
+        echo "       then be testing the new binary against the old one." >&2
+        echo "       Find the holder of $DAEMON_LOCK_FILE and stop it, then rerun." >&2
+        exit 1
+    }
+
     if daemon_lock_held; then
         DAEMON_PID=$(cat "$DAEMON_PID_FILE" 2>/dev/null || true)
         # The pid crosses from a file straight into kill's target position, where a leading
@@ -92,16 +107,54 @@ else
             DAEMON_WAS_RUNNING=1
             kill -TERM "$DAEMON_PID" 2>/dev/null || true
             # Wait for the LOCK to be released, not for the pid to disappear — the lock is
-            # what the replacement daemon will contend for. Sized against a measurement, not
-            # a guess: a clean SIGTERM exit released it in 203 ms, iteration 2 of 10.
+            # what the replacement daemon will contend for. The one measurement available is
+            # 203 ms, iteration 2 of 10 — but it was taken on the OLD exit-143 path, where the
+            # kernel dropped the flock on process death. Release now runs through
+            # DaemonLock.Dispose instead, behind TcpSink.Dispose's _dialLoop.Wait, and that
+            # figure has not been re-measured there. So this budget is NOT validated against
+            # the path it now guards: the escalation below is what covers the tail, and it is
+            # load-bearing rather than belt-and-braces. Re-measure before trusting 2 s.
             for _ in 1 2 3 4 5 6 7 8 9 10; do
                 daemon_lock_held || break
                 sleep 0.2
             done
+
+            # Escalate rather than assume. SIGTERM no longer kills the daemon by default:
+            # RunDaemon intercepts it with a PosixSignalRegistration that sets
+            # ctx.Cancel = true, so the process dies only if it manages to unwind itself,
+            # and the unwind runs behind TcpSink.Dispose's _dialLoop.Wait(DisposeGrace) —
+            # bounded at 2s per sink, which is this poll's entire budget. Without an
+            # escalation the script would fall through to the swap and then print
+            # "Daemon relaunched." while the OLD binary still held the lock: the relaunched
+            # process hits DaemonLock.TryAcquire -> null -> ExitAlreadyRunning, which is
+            # exit 0 logged to the daemon log rather than to this terminal, so the lie is
+            # silent and the developer then tests the new binary against the old one.
+            if daemon_lock_held; then
+                echo "WARNING: daemon $DAEMON_PID did not release $DAEMON_LOCK_FILE within 2s" >&2
+                echo "         of SIGTERM. Escalating to SIGKILL." >&2
+                kill -KILL "$DAEMON_PID" 2>/dev/null || true
+                for _ in 1 2 3 4 5 6 7 8 9 10; do
+                    daemon_lock_held || break
+                    sleep 0.2
+                done
+            fi
+
+            # Abort BEFORE the swap: the DEPLOY is what stays atomic. Nothing has been written
+            # to $DEST or to the marker at this point, so no new binary is left behind and no
+            # relaunch line prints. The box is not otherwise untouched — the publish output
+            # exists, and the daemon that reached this line has been TERMed and KILLed.
+            if daemon_lock_held; then
+                refuse_deploy "$DAEMON_LOCK_FILE is still held after SIGTERM and SIGKILL."
+            fi
         else
-            echo "WARNING: a daemon holds $DAEMON_LOCK_FILE but $DAEMON_PID_FILE does not" >&2
-            echo "         hold a plain pid, so it cannot be signalled. Leaving it running on" >&2
-            echo "         the old binary; stop it yourself and rerun." >&2
+            # The same refusal, reached by a different door. The script has just measured two
+            # things — a daemon is up, and it cannot be addressed — so continuing would swap
+            # the binary and then print "no daemon was running" to stdout, contradicting a
+            # warning it wrote to stderr in the same run. A developer reads stdout. Lead
+            # ruling, checkpoint 29: "never report success it did not achieve" covers the
+            # whole script, not just the SIGTERM path, and an unlikely trigger is an argument
+            # about reaching this branch rather than about what it does when reached.
+            refuse_deploy "$DAEMON_PID_FILE does not hold a plain pid, so the daemon holding $DAEMON_LOCK_FILE cannot be signalled."
         fi
     fi
 

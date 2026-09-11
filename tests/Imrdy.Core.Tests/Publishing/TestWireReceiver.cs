@@ -17,8 +17,18 @@ internal sealed class TestWireReceiver : IDisposable
     private readonly Lock _gate = new();
     private readonly CancellationTokenSource _cts = new();
 
-    public TestWireReceiver()
+    private readonly bool _refuseImmediately;
+    private int _accepts;
+
+    /// <param name="refuseImmediately">
+    /// Accept the socket and close it at once, without reading a frame — what
+    /// <see cref="WireListener"/> does to a publisher whose auth key or schema major does not
+    /// match. It is the shape that separates "a peer took our connection" from "a peer kept
+    /// it", which is what the dial loop's backoff has to tell apart.
+    /// </param>
+    public TestWireReceiver(bool refuseImmediately = false)
     {
+        _refuseImmediately = refuseImmediately;
         _listener = new TcpListener(IPAddress.Loopback, 0);
         _listener.Start();
         Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
@@ -26,6 +36,9 @@ internal sealed class TestWireReceiver : IDisposable
     }
 
     public int Port { get; }
+
+    /// <summary>How many times a publisher has dialled this receiver.</summary>
+    public int Accepts => Volatile.Read(ref _accepts);
 
     public string Endpoint => $"127.0.0.1:{Port}";
 
@@ -72,6 +85,14 @@ internal sealed class TestWireReceiver : IDisposable
             catch (Exception)
             {
                 return;
+            }
+
+            Interlocked.Increment(ref _accepts);
+
+            if (_refuseImmediately)
+            {
+                client.Dispose();
+                continue;
             }
 
             _ = Task.Run(() => ReadLoopAsync(client));

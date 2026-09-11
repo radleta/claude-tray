@@ -18,6 +18,17 @@ public class PublisherHeartbeatTests
     }
 
     [Fact]
+    public void StaleAfter_ClearsTheMeasuredBuildDevRedeployGap()
+    {
+        // The binding input the floor above does not cover: a build-dev.sh stop-deploy-relaunch
+        // on the publisher box measured a 22.04 s beat gap. A threshold under it paints the
+        // disconnected glyph on every dev redeploy, which trains the operator to ignore it.
+        var redeployGap = TimeSpan.FromSeconds(22.04);
+
+        PublisherHeartbeat.StaleAfter.Should().BeGreaterThan(redeployGap);
+    }
+
+    [Fact]
     public void IsStale_BeatInsideTheThreshold_IsFresh()
     {
         var beat = Now - PublisherHeartbeat.StaleAfter + TimeSpan.FromSeconds(1);

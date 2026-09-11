@@ -155,4 +155,53 @@ public class TcpSinkTests
 
         receiver.Frames.Should().NotContain(f => f.State != null && f.State.SessionId == "after-dispose");
     }
+
+    [Fact]
+    public async Task Connect_RetiresAnEndedSessionInsteadOfPublishingItsState()
+    {
+        // The connect snapshot is a receiver's only repair path for an event dropped while
+        // the link was down (D13), and the `end` delta is the event whose loss costs the most:
+        // a receiver that misses it draws the finished session forever, because both its
+        // eviction paths key on the state file being gone. Skipping the file leaves that
+        // unrepairable, so the snapshot sends the removal instead.
+        using var receiver = new TestWireReceiver();
+        using var sink = Sink(receiver, Context(null, Model("live"), Model("finished", status: "end")));
+
+        (await receiver.WaitForAsync(f => f.Count >= 3)).Should().BeTrue();
+
+        receiver.Frames[0].Type.Should().Be(WireFrameTypes.Hello);
+
+        var session = receiver.Frames.Single(f => f.Type == WireFrameTypes.Session);
+        session.State!.SessionId.Should().Be("live");
+
+        var remove = receiver.Frames.Single(f => f.Type == WireFrameTypes.Remove);
+        remove.SessionId.Should().Be("finished");
+    }
+
+    [Fact]
+    public async Task Refused_ByAReceiverThatClosesAtOnce_BacksOffInsteadOfRedialingEverySecond()
+    {
+        // A receiver that accepts the socket and then closes it is what WireListener does on
+        // an auth-key mismatch — a typo in network.authKey, not an attacker. The dial loop used
+        // to read "ConnectAsync returned" as a healthy link and reset the backoff there, so
+        // that typo left the publisher redialling at 1 Hz forever with MaxBackoff never
+        // engaging, re-reading the whole sessions directory on each cycle.
+        //
+        // The arithmetic this asserts, with InitialBackoff = 1s doubling per cycle and a
+        // connection that never survives LinkHeldMinimum past the end of its connect snapshot:
+        // dials land at t=0, 1s and 3s, and the fourth is not due until t=7s. Resetting on
+        // connect instead would put a dial at every whole second — five inside the same window.
+        //
+        // The 4.5s of wall clock is the cost of asserting the property at all: it is a timing
+        // property of a real socket with no injection seam, and hiding it behind a Category the
+        // default filter excludes would mean the guard never runs. The margins are wide on both
+        // sides — the second dial lands at 1s, the fourth is 2.5s past the window's end.
+        using var receiver = new TestWireReceiver(refuseImmediately: true);
+        using var sink = Sink(receiver, Context());
+
+        await Task.Delay(TimeSpan.FromMilliseconds(4500));
+
+        receiver.Accepts.Should().BeGreaterThan(1, "the sink must keep retrying a refused link");
+        receiver.Accepts.Should().BeLessThanOrEqualTo(3);
+    }
 }

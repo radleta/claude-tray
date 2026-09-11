@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Imrdy.Core;
 using Imrdy.Core.Hooks;
@@ -121,37 +122,55 @@ internal static class Program
     }
 
     /// <summary>
-    /// Runs the publisher daemon until SIGINT or SIGTERM. The two do not exit the same way,
-    /// and the difference is measured rather than assumed:
-    /// <list type="bullet">
-    /// <item>SIGINT arrives as <c>CancelKeyPress</c> with <c>e.Cancel = true</c>, so the
-    /// process stays alive, this method unwinds normally, and the lock and PID file are
-    /// released through <c>Dispose</c>.</item>
-    /// <item>SIGTERM is not a <c>CancelKeyPress</c> signal. The runtime raises
-    /// <c>ProcessExit</c> — which is what cancels the token — and then terminates the process
-    /// at exit 143 without unwinding <c>Main</c>. No <c>Dispose</c> runs: the kernel drops the
-    /// <c>flock</c> and <c>daemon.pid</c> is left behind naming a dead pid. Benign, because the
-    /// lock is what liveness is read from on both sides — <c>DaemonLock.IsRunning</c> here and a
-    /// non-blocking <c>flock</c> probe in <c>build-dev.sh</c>. Neither reads the PID file to
-    /// decide whether a daemon is up, and <c>kill -0</c> on that pid is specifically not the
-    /// test: after a <c>wsl --terminate</c> the pid namespace restarts while the rootfs keeps
-    /// the file, so a stale pid can be reused by an unrelated same-user process and would
-    /// confirm. <c>daemon.pid</c> is only how the signal is addressed once the lock has already
-    /// said something is alive.</item>
-    /// </list>
+    /// Runs the publisher daemon until SIGINT or SIGTERM. Both are intercepted with
+    /// <see cref="PosixSignalRegistration"/>, whose handler sets
+    /// <c>PosixSignalContext.Cancel = true</c> so the runtime does not carry out its default
+    /// action: the process stays alive, this method unwinds normally, and the lock and PID
+    /// file are released through <c>Dispose</c>.
+    /// <para>
+    /// <c>Console.CancelKeyPress</c> used to serve SIGINT and was measured not to dispatch on
+    /// Linux at all — under a real controlling terminal the daemon sat in <c>futex_do_wait</c>
+    /// through Ctrl-C and never logged its stop line. SIGTERM was never a <c>CancelKeyPress</c>
+    /// signal in the first place; it reached the token only through <c>ProcessExit</c>, which
+    /// fires too late to unwind and left the runtime terminating at exit 143. So before this
+    /// registration existed there was no path that unwound <c>Main</c>, and <c>daemon.lock</c>
+    /// was released by process death on every ordinary stop.
+    /// </para>
+    /// <para>
+    /// <c>ProcessExit</c> stays subscribed, and its remaining purpose is narrow enough to state
+    /// exactly: on an exit these two registrations do not intercept — SIGHUP, SIGQUIT — it gives
+    /// the unwind a chance to *start* inside the ProcessExit window. That race has been measured
+    /// to lose: under the old build <c>ProcessExit</c> cancelled on SIGTERM and <c>Dispose</c>
+    /// was still observed not to run. It is kept because it is two correctly-unsubscribed lines
+    /// that cost nothing, not because it guarantees a clean shutdown anywhere — do not read it
+    /// as covering those signals. Losing that race is benign for the same reason it always was:
+    /// liveness is read from the lock on both sides —
+    /// <c>DaemonLock.IsRunning</c> here and a non-blocking <c>flock</c> probe in
+    /// <c>build-dev.sh</c> — and the kernel drops the <c>flock</c> when the process dies.
+    /// Neither side reads the PID file to decide whether a daemon is up, and <c>kill -0</c> on
+    /// that pid is specifically not the test: after a <c>wsl --terminate</c> the pid namespace
+    /// restarts while the rootfs keeps the file, so a stale pid can be reused by an unrelated
+    /// same-user process and would confirm. <c>daemon.pid</c> is only how the signal is
+    /// addressed once the lock has already said something is alive.
+    /// </para>
     /// </summary>
     private static int RunDaemon()
     {
         using var cts = new CancellationTokenSource();
 
-        ConsoleCancelEventHandler onCancelKey = (_, e) =>
-        {
-            e.Cancel = true;
-            cts.Cancel();
-        };
-        EventHandler onProcessExit = (_, _) => cts.Cancel();
+        // Declared after `cts` so `using var` disposes them BEFORE it: a signal delivered
+        // during teardown must not reach a handler holding a disposed source. That ordering is
+        // what the `finally` below does by hand for ProcessExit, which is not an IDisposable.
+        using var sigInt = PosixSignalRegistration.Create(PosixSignal.SIGINT, OnSignal);
+        using var sigTerm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, OnSignal);
 
-        Console.CancelKeyPress += onCancelKey;
+        void OnSignal(PosixSignalContext ctx)
+        {
+            ctx.Cancel = true;
+            cts.Cancel();
+        }
+
+        EventHandler onProcessExit = (_, _) => cts.Cancel();
         AppDomain.CurrentDomain.ProcessExit += onProcessExit;
 
         try
@@ -172,15 +191,16 @@ internal static class Program
         }
         finally
         {
-            // Both handlers capture the CancellationTokenSource the `using` above disposes on
+            // The handler captures the CancellationTokenSource the `using` above disposes on
             // the way out, and the runtime raises ProcessExit on *every* exit — including the
             // ordinary return this method has just reached. Left subscribed, the handler fired
             // against the disposed source and every normal daemon exit ended in an
             // ObjectDisposedException trace and `Aborted (core dumped)`; the second-instance
             // path merely returns fast enough to make it obvious. Unsubscribing here is safe
             // because a cancellation that still matters has already been delivered: the daemon
-            // loop is the only thing the token drives and it has returned.
-            Console.CancelKeyPress -= onCancelKey;
+            // loop is the only thing the token drives and it has returned. The two signal
+            // registrations need no line here — `using var` disposes them on the way out of
+            // this method, and because they are declared after `cts` they go first.
             AppDomain.CurrentDomain.ProcessExit -= onProcessExit;
         }
     }

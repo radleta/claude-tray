@@ -50,6 +50,42 @@ public class SessionIngestTests : IDisposable
         _reader.ReadStateFile(Path.Combine(_sessionsDir, "s1.json"))!.OriginMachine.Should().Be("desk2");
     }
 
+    [Fact]
+    public void Apply_RepeatedWithAnIdenticalPayload_DoesNotRewriteTheFile()
+    {
+        // A connect snapshot repeats on every dial over a sessions directory nothing sweeps,
+        // and the write here is a direct write by design (D15) — so every one of them raises a
+        // Changed on the receiver's watcher and travels the whole drain pipeline. Unconditional,
+        // a reconnect costs one write and one watcher event per session for a receiver whose
+        // state did not move. The file's write time is the assertion because it is exactly what
+        // the watcher keys on.
+        var path = Path.Combine(_sessionsDir, "s1.json");
+
+        _ingest.Apply(Model("s1"), "desk2", out _).Should().BeTrue();
+        var firstWrite = File.GetLastWriteTimeUtc(path);
+        var bytes = File.ReadAllBytes(path);
+
+        Thread.Sleep(20);
+        _ingest.Apply(Model("s1"), "desk2", out var refusal).Should().BeTrue();
+
+        refusal.Should().BeNull();
+        File.GetLastWriteTimeUtc(path).Should().Be(firstWrite);
+        File.ReadAllBytes(path).Should().Equal(bytes);
+    }
+
+    [Fact]
+    public void Apply_WithAChangedPayload_StillWritesTheFile()
+    {
+        // The other half: idempotence must remove writes, never change what a write does.
+        var path = Path.Combine(_sessionsDir, "s1.json");
+
+        _ingest.Apply(Model("s1"), "desk2", out _).Should().BeTrue();
+
+        _ingest.Apply(Model("s1") with { Status = "idle" }, "desk2", out _).Should().BeTrue();
+
+        _reader.ReadStateFile(path)!.Status.Should().Be("idle");
+    }
+
     [Theory]
     [InlineData("../../evil")]
     [InlineData(@"..\..\evil")]

@@ -21,7 +21,10 @@ namespace Imrdy.Core.Publishing;
 /// The write is direct, never a temp-then-rename (D15): an atomic write onto an existing target
 /// reaches the host's watcher as <c>Deleted</c> then <c>Renamed</c>, which is not tellable from
 /// a session ending. Torn reads are tolerated instead — <c>ReadStateFile</c> returns null and
-/// the receiver skips.
+/// the receiver skips. The cost of a write is therefore a watcher event and a full drain, which
+/// is why the write is also <em>skipped</em> when the merge produces exactly the bytes already
+/// on disk (<see cref="StateFileReader.WriteStateFileIfChanged"/>). Fewer writes, each one
+/// unchanged in kind — not a different kind of write.
 /// </para>
 /// </summary>
 public sealed class SessionIngest
@@ -60,7 +63,13 @@ public sealed class SessionIngest
 
         var origin = LogFieldEscaper.EscapeBounded(originMachine, MaxEchoedLength);
         var merged = RemoteSessionMerge.Merge(incoming, _reader.ReadStateFile(path), origin);
-        _reader.WriteStateFile(path, merged);
+
+        // A payload identical to what is already on disk is not written at all. A connect
+        // snapshot repeats on every dial over a directory nothing sweeps, so without this a
+        // reconnect costs one direct write and one watcher event per session for a receiver
+        // whose state did not move. Skipping does not weaken delivery: the merge above ran, and
+        // the file already holds its result.
+        _reader.WriteStateFileIfChanged(path, merged);
         return true;
     }
 

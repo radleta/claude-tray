@@ -58,6 +58,8 @@ public class DaemonHostTests : IDisposable
             Project = "imrdy",
             Cwd = "/home/user/imrdy",
             HookEvent = "Stop",
+            // Every hook write stamps this; a model that omits it is dated 0001-01-01.
+            Timestamp = DateTimeOffset.UtcNow,
         });
 
     private bool DeliveredExists(string sessionId) =>

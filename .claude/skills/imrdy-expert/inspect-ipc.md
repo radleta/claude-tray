@@ -1,9 +1,9 @@
 ---
 tags: [imrdy-expert/ipc]
-summary: "Tray IPC: render-live and inspect-live verbs — pipe protocol, dev-default gate, walker+analyzer, threading model, ACL"
+summary: "Tray IPC: the render-live, inspect-live and links-live verbs — pipe protocol, dev-default gate, walker+analyzer, threading model, ACL"
 ---
 
-# Tray IPC: render-live and inspect-live verbs
+# Tray IPC: the render-live, inspect-live and links-live verbs
 
 ## Pipe name and protocol
 
@@ -11,8 +11,21 @@ Pipe name: `Local\ImrdyInspect` (constant `ImrdyPaths.InspectPipeName`).
 
 Framing: 4-byte **little-endian length prefix** followed by a UTF-8 JSON body, used in both directions (request → server, response → client).
 
-- **Request**: `InspectRequest(Verb, SessionId, OutputPath?)` — `OutputPath` is null for `inspect-live`, required absolute path for `render-live`.
-- **Response**: `InspectResponse(SchemaVersion, Verb, Error?, Render?, Inspect?)` — exactly one of `Render` or `Inspect` is non-null on success; both are null on error.
+- **Request**: `InspectRequest(Verb, SessionId, OutputPath?)` — `OutputPath` is null for `inspect-live`, required absolute path for `render-live`. `links-live` needs neither and sends an empty `SessionId`.
+- **Response**: `InspectResponse(SchemaVersion, Verb, Error?, Render?, Inspect?, Links?)` — exactly one of `Render`, `Inspect` or `Links` is non-null on success; all are null on error.
+
+### links-live
+
+The third verb, added for ruling r-2 so `imrdy links` can report **live** link health rather than
+only the records in `publishers.json`. It is session-independent: the handler returns the tray's own
+assembled `ConnectionsViewModel` — the same object the connections window renders — so the CLI and
+the window cannot disagree, and no second payload type was needed (`ConnectionsViewModel` was already
+registered in `ImrdyJsonContext` for the window).
+
+This is why the pipe matters outside diagnostics: `imrdy links` exits 1 on a `Failed` link only when
+it got live health here, and falls back to records-only with exit 0 when no tray answers. Since the
+pipe is off by default in production, records-only is the normal path on a shipped install — every
+run says which of the two it did. `Imrdy.Linux` has no path to this pipe and is always records-only.
 
 All types are source-generated via `ImrdyJsonContext` (camelCase property naming policy). No reflection.
 

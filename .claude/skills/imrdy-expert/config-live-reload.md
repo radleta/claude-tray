@@ -1,6 +1,6 @@
 ---
 tags: [imrdy-expert/architecture]
-summary: "config.json FSW routes through OnConfigChanged for full live reload (sound + icon style + tray god toggle + overlay); overlay structural-delta: Position/Monitor/Locked/OffsetX/OffsetY apply in-place, Enabled/Size/Spacing recreate; startup uses LoadSoundConfig separately"
+summary: "config.json FSW routes through OnConfigChanged for full live reload (sound + icon style + tray god toggle + overlay + network); overlay structural-delta: Position/Monitor/Locked/OffsetX/OffsetY apply in-place, Enabled/Size/Spacing recreate; network re-resolves machineName always and rebinds the listener only on a ListenEnabled/ListenPort change; startup uses LoadSoundConfig separately"
 ---
 
 # Config Live Reload
@@ -48,6 +48,7 @@ The try/catch swallows `IOException`/`JsonException` from mid-write transient re
 | Icon style (`config.Tray.IconStyle`) | Value-compared; on change: refreshes all session icons, invalidates overlay style cache |
 | Tray god toggle (`config.Tray.Enabled`) | Value-compared; on change: shows/hides all tray icons via `ApplyTrayEnabledToAll` |
 | Overlay (`config.Overlay`) | Structural-delta classification: non-structural changes (Position/Monitor/Locked/OffsetX/OffsetY) call `ApplyPositionConfig` in-place — no flash, no dispose+recreate; structural changes (Enabled/Size/Spacing) or Enabled toggle: disposes old panel, controllers, and subscriptions; recreates from fresh config values if `overlay.enabled: true`. Drag-in-flight guard: defers the entire overlay block via `_overlayReloadDeferred` until `IsDragging == false`. |
+| Network (`config.Network`) | `ApplyNetworkConfig`: always re-resolves `_machineName` through `MachineNameResolver`, because sinks resolve the origin per write rather than capturing it — without this a renamed machine kept stamping `origin_machine` with the old name until restart, and the far end saw one machine under two. The inbound listener is disposed and restarted **only** when `ListenEnabled` or `ListenPort` changed; every other field is a no-op rebind-wise. Registered publisher records live in `publishers.json`, not here. |
 
 All comparisons are value-based — a controller-menu change that also writes the file produces a harmless second no-op call.
 
@@ -57,12 +58,12 @@ All comparisons are value-based — a controller-menu change that also writes th
 
 ```
 Startup:       LoadSoundConfig()        → sound only
-FSW trigger:   OnConfigChanged(read)    → sound + icon style + tray toggle + overlay
+FSW trigger:   OnConfigChanged(read)    → sound + icon style + tray toggle + overlay + network
 ```
 
 ## Gotcha: Direct File Edits Apply Immediately
 
-Because `OnConfigChanged` is comprehensive, editing `config.json` directly (or via `imrdy config set`) live-applies all settings — overlay position/lock/monitor/offset, overlay enable/disable, tray enable/disable, icon style changes — without restarting the tray. Structural overlay changes (Size/Spacing/Enabled toggle) dispose and recreate the panel; non-structural changes (Position/Monitor/Locked/OffsetX/OffsetY) apply in-place with no flash. No restart is needed for any config property.
+Because `OnConfigChanged` is comprehensive, editing `config.json` directly (or via `imrdy config set`) live-applies all settings — overlay position/lock/monitor/offset, overlay enable/disable, tray enable/disable, icon style changes, and the whole `network` section — without restarting the tray. Structural overlay changes (Size/Spacing/Enabled toggle) dispose and recreate the panel; non-structural changes (Position/Monitor/Locked/OffsetX/OffsetY) apply in-place with no flash. No restart is needed for any config property.
 
 ## Cross-references
 

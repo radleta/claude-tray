@@ -5,6 +5,24 @@ using Microsoft.Extensions.Logging;
 namespace Imrdy.Core.Publishing;
 
 /// <summary>
+/// What a snapshot does with one state file it just read. Three arms rather than a bool,
+/// because the answer is a decision and not a filter: a session this machine does not own is
+/// left alone, a live one is published, and an ended one is <em>retired</em> — see
+/// <see cref="SessionPublisher.SnapshotActionFor"/> for why the third arm exists.
+/// </summary>
+public enum SnapshotAction
+{
+    /// <summary>Not ours to say anything about (D5).</summary>
+    Skip,
+
+    /// <summary>Ours and still displayable: send its state.</summary>
+    Publish,
+
+    /// <summary>Ours and ended: send a removal, so the receiver drops its copy.</summary>
+    Retire,
+}
+
+/// <summary>
 /// The publish pipeline, identical on every publisher: watch the local sessions directory,
 /// read the state, stamp origin, emit. Only the sink differs (D3).
 /// <para>
@@ -55,8 +73,15 @@ public sealed class SessionPublisher
     }
 
     /// <summary>
-    /// Emits every local session at once. Sent on connect (D12), because pure deltas leave a
-    /// session that went quiet before the receiver connected invisible forever.
+    /// Brings a receiver to current: every local session that has not ended is published, and
+    /// every local session that has is retired. Sent on connect (D12), because pure deltas
+    /// leave a session that went quiet before the receiver connected invisible forever.
+    /// <para>
+    /// Live sessions are filtered by <see cref="SnapshotActionFor"/>, per the user's ruling
+    /// r-4. This is the path that emptied a publisher's entire unswept session directory at a
+    /// receiver when a link was registered; on a TCP link the same dump happens on every
+    /// connect, not once.
+    /// </para>
     /// </summary>
     public async Task PublishSnapshotAsync(CancellationToken cancellationToken)
     {
@@ -64,9 +89,20 @@ public sealed class SessionPublisher
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (RecordOwnership(state))
+            // Ownership is recorded for every file read, whatever we then do with it:
+            // RemoveSessionAsync needs the answer once the file is gone, and a session we
+            // decline to emit is still ours to mirror the removal of.
+            RecordOwnership(state);
+
+            switch (SnapshotActionFor(state))
             {
-                await EmitAsync(state, cancellationToken).ConfigureAwait(false);
+                case SnapshotAction.Publish:
+                    await EmitAsync(state, cancellationToken).ConfigureAwait(false);
+                    break;
+
+                case SnapshotAction.Retire:
+                    await EmitRemoveAsync(state.SessionId, cancellationToken).ConfigureAwait(false);
+                    break;
             }
         }
     }
@@ -113,19 +149,7 @@ public sealed class SessionPublisher
             return;
         }
 
-        foreach (var sink in _sinks())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            try
-            {
-                await sink.RemoveAsync(sessionId, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                LogSinkFault(ex, sink, "remove", sessionId);
-            }
-        }
+        await EmitRemoveAsync(sessionId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -161,6 +185,48 @@ public sealed class SessionPublisher
     /// </para>
     /// </summary>
     public static bool IsLocallyOwned(StateFileModel state) => state.OriginMachine is null;
+
+    /// <summary>
+    /// What a snapshot does with this session: nothing if it is not ours (D5), publish it if it
+    /// is ours and still worth displaying (<see cref="SessionDisplayFilter"/>, the user's ruling
+    /// r-4), and otherwise <em>retire</em> it — send the removal that drops the receiver's copy.
+    /// <para>
+    /// <b>The third arm is not an optimisation; it is what makes D13 true.</b> D13 drops an
+    /// event while a receiver is unreachable and never queues it, on the stated grounds that
+    /// "the state file on disk is already the buffer, and the connect snapshot delivers current
+    /// state on reconnect". A snapshot that merely <em>skips</em> an ended session falsifies
+    /// that sentence for the one status that matters: the publisher's directory is never swept,
+    /// so a missed <c>end</c> delta would be skipped by every later snapshot forever, and the
+    /// receiver — whose two eviction paths both key on the state file being gone — would draw
+    /// that dead session's chip until the user cleared it by hand. Retiring converges instead,
+    /// and costs less than publishing would: a removal frame is a fraction of a session frame,
+    /// and the receiver's delete is a no-op once its copy is already gone.
+    /// </para>
+    /// <para>
+    /// Snapshots only, and deliberately so. A snapshot enumerates a directory that nothing
+    /// sweeps, so it is where a publisher's whole history arrives at once. Filtering deltas
+    /// would be worse than useless — it would suppress the very event that tells a receiver a
+    /// session ended, freezing the chip at its last live status instead of retiring it.
+    /// </para>
+    /// <para>
+    /// A session that has merely gone <em>quiet</em> is published at any age, because that is
+    /// exactly the state imrdy exists to report. An age term was built here and removed on the
+    /// user's ruling r-5; see <see cref="SessionDisplayFilter"/> before adding one back.
+    /// </para>
+    /// <para>
+    /// Public and static for the same reason <see cref="IsLocallyOwned"/> is: a TCP sink
+    /// assembles its own connect snapshot (D12) from <c>SinkContext.LocalSnapshot</c>. Two call
+    /// sites, one decision — a filter on <see cref="PublishSnapshotAsync"/> alone would leave
+    /// the TCP connect dump entirely intact. It returns a decision rather than a pair of
+    /// predicates on purpose: two booleans answering "publish?" and "retire?" are two things a
+    /// later edit can push out of agreement, and a session that is neither published nor
+    /// retired is the defect this arm exists to fix.
+    /// </para>
+    /// </summary>
+    public static SnapshotAction SnapshotActionFor(StateFileModel state) =>
+        !IsLocallyOwned(state) ? SnapshotAction.Skip
+        : SessionDisplayFilter.WouldDisplay(state) ? SnapshotAction.Publish
+        : SnapshotAction.Retire;
 
     /// <summary>
     /// Remembers whether this session is ours, and answers the same question. Every read of a
@@ -200,6 +266,30 @@ public sealed class SessionPublisher
                 // retry either: the state file on disk is already the buffer, and the
                 // connect snapshot delivers current state on reconnect (D13).
                 LogSinkFault(ex, sink, "publish", state.SessionId);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Sends one removal to every sink. Shared by the two reasons a session stops being
+    /// published — its file disappeared (<see cref="RemoveSessionAsync"/>) and it ended
+    /// (<see cref="SnapshotAction.Retire"/>) — so the two cannot drift on what a removal does.
+    /// The ownership guard is the caller's: the file-gone path has to consult a record, and the
+    /// snapshot path has the state file in hand.
+    /// </summary>
+    private async Task EmitRemoveAsync(string sessionId, CancellationToken cancellationToken)
+    {
+        foreach (var sink in _sinks())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                await sink.RemoveAsync(sessionId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                LogSinkFault(ex, sink, "remove", sessionId);
             }
         }
     }

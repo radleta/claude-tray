@@ -20,9 +20,18 @@ namespace Imrdy.Core.Publishing;
 /// </param>
 /// <param name="Reader">Reads and writes state files for the file sink.</param>
 /// <param name="LocalSnapshot">
-/// Every session this machine owns, for the full snapshot a TCP sink sends at connect (D12).
-/// Resolved per connect, so a reconnect delivers current state rather than what was current
-/// when the sink was built.
+/// Every session this machine owns, ended ones included, for the snapshot a TCP sink sends at
+/// connect (D12). Resolved per connect, so a reconnect delivers current state rather than what
+/// was current when the sink was built.
+/// <para>
+/// One filter belongs here and only one: <see cref="SessionPublisher.IsLocallyOwned"/>, D5's
+/// guard, without which a reconnect relays another machine's sessions. What to <em>do</em> with
+/// each session is <see cref="SessionPublisher.SnapshotActionFor"/>'s answer and belongs to the
+/// consumer, because an ended session is not skipped — it is retired, which is a frame this
+/// delegate cannot express by omitting it. Both hosts build this delegate independently (the
+/// daemon in <c>DaemonCommand</c>, the tray in <c>TrayApp</c>), so keeping the decision out of
+/// it is also what stops the two from drifting.
+/// </para>
 /// </param>
 public sealed record SinkContext(
     Func<string> ResolveOriginMachine,

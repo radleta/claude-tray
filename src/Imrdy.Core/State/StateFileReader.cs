@@ -41,13 +41,55 @@ public sealed class StateFileReader
     /// </summary>
     public void WriteStateFile(string path, StateFileModel model)
     {
+        Write(path, JsonSerializer.SerializeToUtf8Bytes(model, ImrdyJsonContext.Default.StateFileModel));
+    }
+
+    /// <summary>
+    /// Writes a state file only when its bytes would differ from what is already there.
+    /// <para>
+    /// For the remote-ingest seam, where a write is never free: it is a direct write by design
+    /// (D15), so every one of them raises a <c>Changed</c> on the receiver's watcher and travels
+    /// the whole drain pipeline — and a TCP publisher re-sends its entire snapshot on every
+    /// dial, over a sessions directory nothing sweeps. Unconditional, that is N reads, N writes
+    /// and N watcher events per reconnect for a receiver whose state did not move. The skip
+    /// changes no delivery semantic: a session that genuinely changed still writes, byte-for-
+    /// byte the same write it would have been, and a removal still removes.
+    /// </para>
+    /// <para>
+    /// The comparison is against the file's own bytes rather than against a re-serialized model
+    /// so that "unchanged" means what the watcher means by it. A file that cannot be read back
+    /// is treated as different and written, which is the same tolerance
+    /// <see cref="ReadStateFile"/> already has for a torn or corrupt file.
+    /// </para>
+    /// </summary>
+    public void WriteStateFileIfChanged(string path, StateFileModel model)
+    {
+        var json = JsonSerializer.SerializeToUtf8Bytes(model, ImrdyJsonContext.Default.StateFileModel);
+
+        try
+        {
+            if (File.Exists(path) && File.ReadAllBytes(path).AsSpan().SequenceEqual(json))
+            {
+                return;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Mid-write, locked, gone since the Exists check, or unreadable — fall through and
+            // write. Same pair FileSink guards its own file operations with.
+        }
+
+        Write(path, json);
+    }
+
+    private static void Write(string path, byte[] json)
+    {
         var dir = Path.GetDirectoryName(path);
         if (dir is not null && !Directory.Exists(dir))
         {
             Directory.CreateDirectory(dir);
         }
 
-        var json = JsonSerializer.SerializeToUtf8Bytes(model, ImrdyJsonContext.Default.StateFileModel);
         File.WriteAllBytes(path, json);
     }
 

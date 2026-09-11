@@ -60,21 +60,32 @@ public static class PublisherHeartbeat
 
     /// <summary>
     /// How old a beat may get before its publisher reads as disconnected. <b>Derived, not
-    /// chosen by feel</b> — re-derive it rather than nudging it:
+    /// chosen by feel</b> — re-derive it rather than nudging it. Two inputs, and the second is
+    /// the larger one:
     /// <list type="number">
-    /// <item>One beat period is <see cref="Interval"/>, 5 s.</item>
-    /// <item>A beat is not visible to the receiver the instant it is written. The live
-    /// two-machine pass measured the WSL-write-to-Windows-observation band on this same mount
-    /// at 144–257 ms, so round the upper end to 1 s.</item>
-    /// <item>The write rides a loop tick that also drains publishing, so one beat can slip a
-    /// tick without the publisher being gone. Tolerating two consecutive misses gives three
-    /// periods, 15 s.</item>
+    /// <item><b>The floor: interval plus mount latency.</b> One beat period is
+    /// <see cref="Interval"/>, 5 s. A beat is not visible to the receiver the instant it is
+    /// written — the live two-machine pass measured the WSL-write-to-Windows-observation band
+    /// on this same mount at 144–257 ms, so round the upper end to 1 s. The write also rides a
+    /// loop tick that drains publishing, so one beat can slip a tick without the publisher
+    /// being gone; tolerating two consecutive misses gives three periods. 15 s + 1 s = 16 s.
+    /// Anything below about 5.3 s reports a live publisher as gone outright.</item>
+    /// <item><b>The binding input: the redeploy gap.</b> A <c>build-dev.sh</c> stop-deploy-
+    /// relaunch on the publisher box produces a beat gap measured at <b>22.04 s</b>
+    /// (19:18:29.768 → 19:18:51.814, live pass 2). That is an operator-caused, repeatable
+    /// absence, and 16 s does not clear it — the shipped 20 s did not either, which is why this
+    /// constant moved. The publisher genuinely is down during a redeploy, so the glyph would
+    /// not be lying; it would still be wrong to paint, because the disconnected treatment
+    /// exists to report <i>unexpected</i> absence and an alarm that fires on every dev redeploy
+    /// teaches the operator to discount it.</item>
     /// </list>
-    /// 15 s + 1 s, rounded up to <b>20 s</b> for margin. The floor this must clear is
-    /// <see cref="Interval"/> plus that latency band, about 5.3 s; anything below that reports
-    /// a live publisher as gone. Raising <see cref="Interval"/> means re-deriving this.
+    /// <b>30 s</b> clears the 22.04 s measurement with margin and is still only six beats. The
+    /// cost is ten seconds' slower detection of a genuinely dead publisher, which is small for
+    /// a signal about staleness rather than about real time. Raise this, not
+    /// <see cref="Interval"/>, if the redeploy gap ever grows: the beat rate is not what that
+    /// gap measures. Raising <see cref="Interval"/> means re-deriving both inputs.
     /// </summary>
-    public static readonly TimeSpan StaleAfter = TimeSpan.FromSeconds(20);
+    public static readonly TimeSpan StaleAfter = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// The heartbeat directory beside a sessions directory. Takes the sessions directory

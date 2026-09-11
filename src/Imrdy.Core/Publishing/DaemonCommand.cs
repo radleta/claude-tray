@@ -17,9 +17,21 @@ public static class DaemonCommand
     private static readonly TimeSpan DrainInterval = TimeSpan.FromMilliseconds(200);
 
     /// <summary>
-    /// Runs the daemon. <paramref name="cancellationToken"/> is the stop signal; the caller
-    /// wires it to SIGINT and SIGTERM so a distro shutdown releases the lock cleanly rather
-    /// than relying on the kernel to do it.
+    /// Runs the daemon. <paramref name="cancellationToken"/> is the stop signal; the Linux
+    /// caller wires it to SIGINT and SIGTERM with a <c>PosixSignalRegistration</c> pair, so
+    /// those two signals unwind this method and release the lock and PID file through
+    /// <c>DaemonLock.Dispose</c>.
+    /// <para>
+    /// <b>That covers those two signals and nothing else.</b> A <c>wsl --terminate</c>, a
+    /// SIGKILL, a crash, SIGHUP and SIGQUIT all terminate the process without unwinding, so
+    /// <c>Dispose</c> never runs, the kernel drops the advisory <c>flock</c>, and
+    /// <c>daemon.pid</c> is left behind naming a dead pid. That is the normal state after a
+    /// distro shutdown, not an edge case — which is exactly why liveness is read from the lock
+    /// on both sides (<c>DaemonLock.IsRunning</c>, and a non-blocking <c>flock</c> probe in
+    /// <c>build-dev.sh</c>) and never from the PID file. Do not conclude from the signal wiring
+    /// that a stale <c>daemon.pid</c> cannot happen; the flock-over-pid guard exists for
+    /// precisely the paths this registration does not reach.
+    /// </para>
     /// </summary>
     public static async Task<int> RunAsync(
         ServiceProvider services,

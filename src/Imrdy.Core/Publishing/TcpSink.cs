@@ -27,6 +27,35 @@ public sealed class TcpSink : ISessionSink, IDisposable
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan DisposeGrace = TimeSpan.FromSeconds(2);
 
+    /// <summary>
+    /// How long a connection must last before it counts as a link that <em>held</em>, and so
+    /// before the backoff is allowed back down to <see cref="InitialBackoff"/>.
+    /// <para>
+    /// The receiver never acknowledges anything (D4), so there is no application-level signal
+    /// that a peer accepted us — only how long it left the socket open. A refusing receiver
+    /// closes at once: <c>WireListener.TryAcceptHello</c> reads one line and drops the
+    /// connection on an auth-key mismatch or a schema-major mismatch, which is a single round
+    /// trip on a tailnet. A real link lasts until the publisher or the receiver stops. Five
+    /// seconds is far above the first and far below the second, so it separates them without
+    /// having to guess at either precisely.
+    /// </para>
+    /// <para>
+    /// It is measured from the <em>end of the connect snapshot</em>, not from the TCP connect, so
+    /// a slow snapshot cannot spend the budget on its own and buy a refusing peer the reset. That
+    /// is the stricter of the two available points, and deliberately: the snapshot's cost grows
+    /// with a sessions directory nothing sweeps, so measuring from the connect would weaken this
+    /// guard exactly as the problem it guards against got worse. The price of the stricter point
+    /// is that a genuinely healthy link dropping just after a slow snapshot backs off further than
+    /// it needed — capped at <see cref="MaxBackoff"/> and self-correcting on the next link that
+    /// holds, where the looser direction restores the defect outright.
+    /// </para>
+    /// <para>
+    /// It is a property of one connection, never of a session's age. The session-age lever is
+    /// closed by the user's ruling r-5 and nothing here reopens it.
+    /// </para>
+    /// </summary>
+    private static readonly TimeSpan LinkHeldMinimum = TimeSpan.FromSeconds(5);
+
     private readonly string _linkName;
     private readonly string _host;
     private readonly int _port;
@@ -170,11 +199,14 @@ public sealed class TcpSink : ISessionSink, IDisposable
 
         while (!cancellationToken.IsCancellationRequested)
         {
+            // Null while we are still talking, and for a connect that threw — so a hello write
+            // that faults is correctly not a link that held.
+            DateTimeOffset? snapshotDoneAt = null;
+
             try
             {
                 SetState(SinkState.Dialing);
-                await ConnectAsync(cancellationToken).ConfigureAwait(false);
-                backoff = InitialBackoff;
+                snapshotDoneAt = await ConnectAsync(cancellationToken).ConfigureAwait(false);
 
                 // Held until the receiver closes or the link faults; the loop then redials.
                 await AwaitPeerCloseAsync(cancellationToken).ConfigureAwait(false);
@@ -194,6 +226,18 @@ public sealed class TcpSink : ISessionSink, IDisposable
                 DropConnection();
             }
 
+            // Reset only for a link that went on holding after we stopped talking. Resetting on
+            // "the connect returned" reads a socket the peer is about to close as a healthy link,
+            // and a receiver that refuses our auth key does exactly that — which left this loop
+            // redialling at 1 Hz forever, re-reading the whole sessions directory and re-sending
+            // it each time, with MaxBackoff never engaging. The clock starts at the end of the
+            // snapshot, so the snapshot's own duration can never pay for the reset.
+            if (snapshotDoneAt is { } readyAt
+                && DateTimeOffset.UtcNow - readyAt >= LinkHeldMinimum)
+            {
+                backoff = InitialBackoff;
+            }
+
             try
             {
                 await Task.Delay(backoff, cancellationToken).ConfigureAwait(false);
@@ -207,9 +251,18 @@ public sealed class TcpSink : ISessionSink, IDisposable
         }
     }
 
-    private async Task ConnectAsync(CancellationToken cancellationToken)
+    /// <returns>
+    /// When the connect snapshot finished — deliberately the <em>latest</em> of the points this
+    /// could be taken, so that only the link's life <em>after</em> we stopped talking counts
+    /// toward <see cref="LinkHeldMinimum"/>. Starting the clock at the TCP connect instead would
+    /// let a slow snapshot spend the whole budget on its own, handing a refusing peer the reset —
+    /// and the snapshot is exactly the thing that grows without bound on an unswept directory, so
+    /// that guard would weaken as the problem worsened.
+    /// </returns>
+    private async Task<DateTimeOffset> ConnectAsync(CancellationToken cancellationToken)
     {
         var client = new TcpClient();
+
         try
         {
             await client.ConnectAsync(_host, _port, cancellationToken).ConfigureAwait(false);
@@ -239,19 +292,43 @@ public sealed class TcpSink : ISessionSink, IDisposable
         _logger.LogInformation("Sink {Link}: connected to {Host}:{Port}", _linkName, _host, _port);
 
         await SendConnectSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        return DateTimeOffset.UtcNow;
     }
 
     /// <summary>
-    /// The full snapshot D12 requires at connect. Without it a session that went quiet before
+    /// The snapshot D12 requires at connect. Without it a session that went quiet before
     /// this receiver connected would stay invisible to it forever, and a session removed while
     /// the link was down would linger as a ghost.
+    /// <para>
+    /// Its contents are whatever <c>SinkContext.LocalSnapshot</c> yields — this machine's own
+    /// sessions, ended ones included — and <see cref="SessionPublisher.SnapshotActionFor"/>
+    /// decides what each one becomes on the wire. An ended session is retired rather than
+    /// published, so this snapshot converges the receiver in both directions: the live sessions
+    /// it has not seen appear, and the ones that ended while the link was down are dropped.
+    /// That second half is what D13 means when it says nothing needs queueing.
+    /// </para>
+    /// <para>
+    /// It matters most here rather than on the one-shot startup snapshot: this runs on every
+    /// dial, so a list that published everything would re-dump the publisher's entire unswept
+    /// session history at each reconnect.
+    /// </para>
     /// </summary>
     private async Task SendConnectSnapshotAsync(CancellationToken cancellationToken)
     {
         foreach (var state in _context.LocalSnapshot())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await PublishAsync(state, cancellationToken).ConfigureAwait(false);
+
+            switch (SessionPublisher.SnapshotActionFor(state))
+            {
+                case SnapshotAction.Publish:
+                    await PublishAsync(state, cancellationToken).ConfigureAwait(false);
+                    break;
+
+                case SnapshotAction.Retire:
+                    await RemoveAsync(state.SessionId, cancellationToken).ConfigureAwait(false);
+                    break;
+            }
         }
     }
 

@@ -29,18 +29,32 @@ public class SessionPublisherTests : IDisposable
         }
     }
 
-    private static StateFileModel Model(string sessionId, string? originMachine = null) => new()
+    private static StateFileModel Model(
+        string sessionId,
+        string? originMachine = null,
+        string status = "busy",
+        TimeSpan? age = null) => new()
     {
         SessionId = sessionId,
-        Status = "busy",
+        Status = status,
         Project = "imrdy",
         Cwd = "/home/user/imrdy",
         HookEvent = "Stop",
         OriginMachine = originMachine,
+        // Every hook write stamps this. A model that omits it is dated 0001-01-01, because
+        // Timestamp is a non-required DateTimeOffset — a tripwire for any rule that reads it.
+        // The `age` parameter is how a test asks for an old session on purpose.
+        Timestamp = DateTimeOffset.UtcNow - (age ?? TimeSpan.Zero),
     };
 
-    private void WriteSession(string sessionId, string? originMachine = null) =>
-        _reader.WriteStateFile(Path.Combine(_sessionsDir, $"{sessionId}.json"), Model(sessionId, originMachine));
+    private void WriteSession(
+        string sessionId,
+        string? originMachine = null,
+        string status = "busy",
+        TimeSpan? age = null) =>
+        _reader.WriteStateFile(
+            Path.Combine(_sessionsDir, $"{sessionId}.json"),
+            Model(sessionId, originMachine, status, age));
 
     [Fact]
     public async Task PublishSnapshotAsync_EmitsEveryLocalSession()
@@ -301,6 +315,134 @@ public class SessionPublisherTests : IDisposable
         var drain = () => _publisher.DrainAsync([new SessionChange("s1", SessionChangeKind.Changed)], cts.Token);
 
         await drain.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task PublishSnapshotAsync_RealisticBacklog_EmitsEverythingNotEnded_AtAnyAge()
+    {
+        // The defect ruling r-4 exists for, reproduced at the shape the user's machine had:
+        // a sessions directory nothing ever sweeps, holding months of files. Registering a
+        // link emptied the whole directory at the receiver and every file drew a tray chip.
+        //
+        // This fixture is dirty ON PURPOSE. Both live verification passes and sixteen
+        // verifier iterations missed this defect, and the single reason is that every fixture
+        // in the corpus held three or four freshly-written synthetic sessions — a directory
+        // with no history cannot express the bug. A backlog is the precondition, so the test
+        // that would have caught it has to have one.
+        //
+        // What the backlog proves changed under ruling r-5. AGE IS NOT THE RULE: a session
+        // quiet for 77 days is exactly what imrdy exists to tell the user about, so it
+        // publishes. Only the ones the hook already reported as over are dropped. An earlier
+        // build filtered on age and the user rejected it outright — see
+        // SessionDisplayFilter's doc before reintroducing one.
+        for (var i = 0; i < 50; i++)
+        {
+            WriteSession($"quiet-{i}", age: TimeSpan.FromDays(77));
+        }
+
+        for (var i = 0; i < 20; i++)
+        {
+            WriteSession($"finished-{i}", status: "end", age: TimeSpan.FromDays(77));
+        }
+
+        WriteSession("recent", age: TimeSpan.FromMinutes(59));
+        WriteSession("live");
+
+        await _publisher.PublishSnapshotAsync(CancellationToken.None);
+
+        var published = _sink.Published.Select(s => s.SessionId).ToList();
+
+        published.Should().HaveCount(52);
+        published.Should().Contain(["live", "recent", "quiet-0", "quiet-49"]);
+        published.Should().NotContain(id => id.StartsWith("finished-", StringComparison.Ordinal));
+
+        // And the 20 that ended are retired rather than left unmentioned — the receiver has
+        // to be told once, or its copy of each never goes away. See
+        // PublishSnapshotAsync_EndedSession_IsRetiredNotPublished.
+        _sink.Removed.Should().HaveCount(20);
+        _sink.Removed.Should().Contain(["finished-0", "finished-19"]);
+    }
+
+    [Fact]
+    public async Task PublishSnapshotAsync_EndedSession_IsRetiredNotPublished()
+    {
+        // A session the hook has already reported as over draws nothing on any receiver, so
+        // a snapshot carrying its state is pure noise. Its file lingers because nothing sweeps
+        // the directory (see scratch/issues/linux-sessions-dir-never-swept.md).
+        //
+        // But skipping it silently is not enough, and that was a would-ship bug for one
+        // checkpoint. D13 drops an event while a receiver is unreachable and never queues it,
+        // on the stated grounds that "the connect snapshot delivers current state on
+        // reconnect". A snapshot that says NOTHING about an ended session falsifies that for
+        // the one status that retires a chip: the end delta is gone, every later snapshot
+        // skips the file too, and the receiver — whose eviction paths both key on the file
+        // being gone — draws that dead session until the user clears it by hand. So the
+        // snapshot retires it instead.
+        WriteSession("finished", status: "end");
+        WriteSession("live");
+
+        await _publisher.PublishSnapshotAsync(CancellationToken.None);
+
+        _sink.Published.Select(s => s.SessionId).Should().Equal("live");
+        _sink.Removed.Should().Equal("finished");
+    }
+
+    [Fact]
+    public async Task PublishSnapshotAsync_EndedRemoteSession_IsNeitherPublishedNorRetired()
+    {
+        // The retire arm must not reach across D5's guard. A session file stamped with another
+        // machine's origin is that machine's to retire; mirroring its removal from here is a
+        // command travelling receiver -> publisher, which D4 forbids outright, and it would
+        // delete a live state file on the machine the session came from.
+        WriteSession("theirs", originMachine: "desktop2", status: "end");
+
+        await _publisher.PublishSnapshotAsync(CancellationToken.None);
+
+        _sink.Published.Should().BeEmpty();
+        _sink.Removed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PublishSnapshotAsync_LongQuietSession_IsStillEmitted()
+    {
+        // Ruling r-5 in one assertion. A quiet session is the product's whole subject; the
+        // moment this test goes red, something has reintroduced an age term on the publish
+        // path and the tray has stopped hearing about the sessions that need the user most.
+        WriteSession("quiet-for-months", age: TimeSpan.FromDays(120));
+
+        await _publisher.PublishSnapshotAsync(CancellationToken.None);
+
+        _sink.Published.Select(s => s.SessionId).Should().Equal("quiet-for-months");
+    }
+
+    [Fact]
+    public async Task PublishSessionAsync_EndedSession_IsStillEmitted()
+    {
+        // r-4's filter is snapshot-only. This delta is exactly how a receiver learns a
+        // session finished; suppressing it would freeze the chip at its last live status
+        // instead of retiring it, which is a worse defect than the one r-4 fixes.
+        WriteSession("finished", status: "end");
+
+        await _publisher.PublishSessionAsync("finished", CancellationToken.None);
+
+        _sink.Published.Select(s => s.SessionId).Should().Equal("finished");
+    }
+
+    [Fact]
+    public async Task PublishSnapshotAsync_FilteredSession_IsStillOursToRemove()
+    {
+        // Not published by the snapshot, but ownership was still recorded — otherwise
+        // deleting one of those backlog files would go unmirrored, because an unrecorded
+        // session fails closed (D4). The snapshot's own retire is the first entry here; the
+        // second is the one this test is about, and it proves RecordOwnership ran.
+        WriteSession("finished", status: "end");
+
+        await _publisher.PublishSnapshotAsync(CancellationToken.None);
+        _sink.Published.Should().BeEmpty();
+
+        await _publisher.RemoveSessionAsync("finished", CancellationToken.None);
+
+        _sink.Removed.Should().Equal("finished", "finished");
     }
 
     private sealed class RecordingSink(string name) : ISessionSink

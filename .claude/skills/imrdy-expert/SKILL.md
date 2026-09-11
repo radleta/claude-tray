@@ -9,7 +9,7 @@ You are an expert in the imrdy project — a Windows system tray monitor for Cla
 
 - [Architecture](architecture.md) — Seven entry points, timer interactions, field preservation, and state file lifecycle
 - [State File Write Path](state-file-write-path.md) — Session state files use direct File.WriteAllBytes — not AtomicFileWriter — because delete-then-move suppresses FSW Changed events
-- [Config Live Reload](config-live-reload.md) — config.json FSW routes through OnConfigChanged for full live reload (sound + icon style + tray god toggle + overlay); overlay structural-delta: Position/Monitor/Locked/OffsetX/OffsetY apply in-place, Enabled/Size/Spacing recreate; startup uses LoadSoundConfig separately
+- [Config Live Reload](config-live-reload.md) — config.json FSW routes through OnConfigChanged for full live reload (sound + icon style + tray god toggle + overlay + network); overlay structural-delta: Position/Monitor/Locked/OffsetX/OffsetY apply in-place, Enabled/Size/Spacing recreate; network re-resolves machineName always and rebinds the listener only on a ListenEnabled/ListenPort change; startup uses LoadSoundConfig separately
 - [Tray vs Hook Write Race](tray-hook-write-race.md) — Hook and tray both RMW session state files with no coordination — tray-side field changes are silently dropped if the field isn't on the FieldPreservation list
 - [Tray Persistence Verbs](tray-persistence-verbs.md) — Catalog of every place the tray process writes JSON state to disk — a debugging checklist for persistence loss
 - [Field Preservation Catalog](field-preservation-catalog.md) — The 6 sticky fields in FieldPreservation.PreserveFields, the merge pattern, and the symmetry contract every new tray-owned field must satisfy
@@ -36,7 +36,7 @@ You are an expert in the imrdy project — a Windows system tray monitor for Cla
 - [HookAccumulationStore Apply from FSW](hookaccumulationstore-apply-from-fsw.md) — Construct HookEventModel from StateFileModel when calling Apply from FSW path.
 - [Hover-Preview Live-Switch Detection](hover-switch-live-update.md) — Detect session change via TryGetSessionIdAtScreenPoint while form is visible; apply live-update pattern
 - [Z-Order Gate Obsoletes Overlay-Hide-on-Menu](z-order-gate-obsoletes-menu-paper-over.md) — WindowFromPoint z-order gating makes overlay-hide-on-menu paper-overs redundant; pure geometric containment is insufficient
-- [Tray IPC: render-live and inspect-live](inspect-ipc.md) — Tray IPC: render-live and inspect-live verbs — pipe protocol, dev-default gate, walker+analyzer, threading model, ACL
+- [Tray IPC: render-live, inspect-live and links-live](inspect-ipc.md) — Tray IPC: the render-live, inspect-live and links-live verbs — pipe protocol, dev-default gate, walker+analyzer, threading model, ACL
 - [WSL→Windows PATH Passthrough Baseline](wsl-interop-baseline.md) — WSL→Windows PATH passthrough varies per distro; explicit verification needed
 - [WSLENV Distro Identity Gap](wslenv-distro-not-forwarded.md) — WSLENV doesn't auto-forward WSL_DISTRO_NAME; Windows binaries can't self-identify source distro
 - [WSL_DISTRO_NAME Env Var Gotcha](wsl-distro-env-var-gotcha.md) — WSL_DISTRO_NAME env var requires explicit pickup via IHookEnvironment; code exists but fallback was never wired
@@ -57,7 +57,7 @@ You are an expert in the imrdy project — a Windows system tray monitor for Cla
 - [scoped-rederivation-leaves-stale-neighbours](scoped-rederivation-leaves-stale-neighbours.md) — Scoping artifact corrections to one source file leaves stale neighbor citations untouched
 - [claude-local-md-is-gitignored-local-memory](claude-local-md-is-gitignored-local-memory.md) — CLAUDE.local.md is gitignored local working memory — it may or may not exist on any given machine, and git status --short will never list it, so any acceptance criterion asserting otherwise is unsatisfiable
 - [mdite-heading-anchor-slugs-drop-inline-code](mdite-heading-anchor-slugs-drop-inline-code.md) — mdite strips inline-code spans (backticks and their contents) from heading text before slugifying, so its anchors diverge from GitHub's — a heading with inline code cannot satisfy both renderers
-- [build-dev-cross-platform](build-dev-cross-platform.md) — build-dev.sh OS-detects and publishes a Linux binary to ~/.local/bin/imrdy — atomic swap via temp-in-same-dir + mv, plus a SIGTERM/relaunch-if-it-was-running cycle for the publisher daemon
+- [build-dev-cross-platform](build-dev-cross-platform.md) — build-dev.sh OS-detects and publishes a Linux binary to ~/.local/bin/imrdy — atomic swap via temp-in-same-dir + mv, and a daemon stop sequence that escalates SIGTERM to SIGKILL and then refuses to deploy (exit 1) rather than relaunching over a daemon it could not stop
 - [config-validator-known-keys-gap](config-validator-known-keys-gap.md) — ConfigValidator keeps its own known-keys sets, compiler-unenforced — a new config.json section is a three-touch change (ImrdyConfig, EnsureDefaults, ConfigValidator) and step 3 was skipped twice before D33 closed it
 
 ## Meta
