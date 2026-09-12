@@ -30,16 +30,17 @@ public class ConnectionsViewModelBuilderTests
     private static ConnectionsViewModel Build(
         PublisherConfig config,
         IReadOnlyList<SinkHealth>? outbound = null,
-        IReadOnlyList<SinkHealth>? inbound = null) =>
+        IReadOnlyList<SinkHealth>? inbound = null,
+        IReadOnlyList<MachineBeat>? heartbeats = null) =>
         ConnectionsViewModelBuilder.Build(
-            config, outbound ?? [], inbound ?? [], "receiver-box", listenEnabled: true, listenPort: 47600,
-            authKeyConfigured: true, Now);
+            config, outbound ?? [], inbound ?? [], heartbeats ?? [], "receiver-box",
+            listenEnabled: true, listenPort: 47600, authKeyConfigured: true, Now);
 
     [Fact]
     public void Build_CarriesTheReceiversOwnIdentityAndListenState()
     {
         var vm = ConnectionsViewModelBuilder.Build(
-            Config(), [], [], "receiver-box", listenEnabled: false, listenPort: 47610,
+            Config(), [], [], [], "receiver-box", listenEnabled: false, listenPort: 47610,
             authKeyConfigured: true, Now);
 
         vm.MachineName.Should().Be("receiver-box");
@@ -147,6 +148,46 @@ public class ConnectionsViewModelBuilderTests
         var row = vm.Rows.Should().ContainSingle().Subject;
         row.Endpoint.Should().Be("a:1", "the first record wins, so the list order the operator sees is the file's");
         row.Inbound!.State.Should().Be(SinkState.Failed, "the last health report wins — it is the newer fact");
+    }
+
+    [Fact]
+    public void Build_StaleBeat_SaysSoInTheLastErrorCellAndStaysFileSink()
+    {
+        var beat = Now - PublisherHeartbeat.StaleAfter - TimeSpan.FromMinutes(4);
+
+        var row = Build(Config(), heartbeats: [new MachineBeat("wsl-box", beat, NameIsToken: false)])
+            .Rows.Should().ContainSingle().Subject;
+
+        row.Inbound!.State.Should().Be(
+            SinkState.FileSink,
+            "a stale beat is not a dropped link: SinkState.Failed is what imrdy links exits 1 on, "
+            + "and D27 says a file sink has no connection to have lost");
+        ConnectionRowFormatter.LastError(row).Should().Contain("no heartbeat for");
+        row.IsFailed.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Build_FreshBeat_ReportsNoError()
+    {
+        var row = Build(Config(), heartbeats: [new MachineBeat("wsl-box", Now.AddSeconds(-4), NameIsToken: false)])
+            .Rows.Should().ContainSingle().Subject;
+
+        ConnectionRowFormatter.LastError(row).Should().BeEmpty();
+        row.LastDelivery.Should().Be("4s ago");
+    }
+
+    [Fact]
+    public void Build_MachineWithBothASocketAndABeat_KeepsTheSocketAndStillProducesOneRow()
+    {
+        // Not a case the design expects — a publisher picks one sink — but two rows for one
+        // machine is the failure this join exists to prevent, so it is pinned rather than left
+        // to the ordering of two loops.
+        var vm = Build(
+            Config(Entry("wsl-box")),
+            inbound: [Health("wsl-box", SinkState.Connected)],
+            heartbeats: [new MachineBeat("wsl-box", Now.AddSeconds(-4), NameIsToken: false)]);
+
+        vm.Rows.Should().ContainSingle().Which.Inbound!.State.Should().Be(SinkState.Connected);
     }
 
     [Fact]

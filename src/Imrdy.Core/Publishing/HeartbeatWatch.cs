@@ -38,6 +38,15 @@ public sealed class HeartbeatWatch
     public HeartbeatWatch(string heartbeatDirectory) => _directory = heartbeatDirectory;
 
     /// <summary>
+    /// The current snapshot, keyed by <see cref="PublisherHeartbeat.TokenFor"/> token. Exposed
+    /// because <see cref="IsDisconnected"/> answers about a publisher the caller can already
+    /// name, and the connections surfaces have the opposite problem: they need to know a
+    /// file-sink publisher exists at all. The keys are tokens and a token is lossy, so name
+    /// them through <see cref="HeartbeatMachines.Resolve"/> rather than rendering a key.
+    /// </summary>
+    public IReadOnlyDictionary<string, DateTimeOffset> Beats => _beats;
+
+    /// <summary>
     /// Re-reads every beat. Two failure levels, each deliberate. A <em>directory</em> that
     /// cannot be listed — the ordinary case on a receiver no file-sink publisher has ever
     /// written to — leaves the previous snapshot standing untouched, so a transient IO blip

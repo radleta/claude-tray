@@ -30,6 +30,7 @@ public class LinksReportTests
             new NetworkConfig(),
             "receiver-box",
             wslDistro: null,
+            heartbeats: [],
             Now);
 
     private static ConnectionRow Row(params PublisherEntry[] entries) => Build(entries).Rows[0];
@@ -42,6 +43,7 @@ public class LinksReportTests
             new NetworkConfig { ListenEnabled = true, ListenPort = 47610 },
             "receiver-box",
             wslDistro: "Ubuntu",
+            heartbeats: [],
             Now);
 
         vm.MachineName.Should().Be("receiver-box-Ubuntu");
@@ -110,6 +112,7 @@ public class LinksReportTests
             new PublisherConfig { Publishers = [Entry("desk2")] },
             outbound: [health],
             inbound: [],
+            heartbeats: [],
             "receiver-box",
             listenEnabled: true,
             listenPort: 47600,
@@ -193,6 +196,19 @@ public class LinksReportTests
 
         lines.Should().Contain("No links registered.");
         lines.Should().Contain(l => l.StartsWith("listening: no", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RenderLines_NotListening_ScopesTheClaimToTcpPublishers()
+    {
+        var line = LinksReport.RenderLines(Build(), live: false)[1];
+
+        line.Should().Contain(
+            ConnectionRowFormatter.NotListening,
+            "the listener governs TCP publishers only — a file-sink publisher writes through a "
+            + "shared directory and needs no listener, no port and no firewall rule, so saying "
+            + "inbound publishers cannot reach this machine is false exactly where D3 put WSL");
+        line.Should().NotContain("inbound publishers cannot reach");
     }
 
     [Fact]

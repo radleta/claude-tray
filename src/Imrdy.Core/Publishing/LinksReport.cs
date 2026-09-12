@@ -8,7 +8,10 @@ namespace Imrdy.Core.Publishing;
 /// Linux binary uses.
 /// <para>
 /// A CLI process holds no sinks and no listener of its own, so what <see cref="Build"/>
-/// produces is records-only — every row reads from <c>publishers.json</c> alone. Under the
+/// produces is records-only: no link state, every registered row read from
+/// <c>publishers.json</c>. The one thing it does see without a tray is a file-sink publisher's
+/// heartbeat, which is a file on disk rather than a socket somebody else is holding — without
+/// it a publisher actively delivering here would print nothing at all. Under the
 /// user's ruling r-2 that is the <em>fallback</em>, not the whole command: the Windows binary
 /// first asks the running tray for its live <see cref="ConnectionsViewModel"/> over the
 /// <c>Local\ImrdyInspect</c> pipe, and falls back here when no tray answers. Either way both
@@ -34,16 +37,24 @@ public static class LinksReport
     private static readonly string[] Headers =
         ["MACHINE", "ENDPOINT", "OUTBOUND", "INBOUND", "DESKTOP", "NOTIFY", "LAST DELIVERY", "LAST ERROR"];
 
+    /// <param name="heartbeats">
+    /// File-sink publishers known from their beats. This process has no listener to enumerate
+    /// publishers from, and a file sink would not appear in one anyway (<c>f-filesink-no-socket</c>),
+    /// so without this a publisher actively delivering into this machine prints nothing at all.
+    /// <see cref="HeartbeatMachines.Read"/> is what a CLI process fills it from.
+    /// </param>
     public static ConnectionsViewModel Build(
         PublisherConfig publishers,
         NetworkConfig network,
         string hostName,
         string? wslDistro,
+        IReadOnlyList<MachineBeat> heartbeats,
         DateTimeOffset now) =>
         ConnectionsViewModelBuilder.Build(
             publishers,
             outbound: [],
             inbound: [],
+            heartbeats,
             MachineNameResolver.Resolve(network.MachineName, hostName, wslDistro),
             network.ListenEnabled,
             network.ListenPort,
@@ -121,7 +132,7 @@ public static class LinksReport
             $"machine: {vm.MachineName}",
             vm.ListenEnabled
                 ? $"listening: yes (port {vm.ListenPort}){(vm.AuthKeyConfigured ? "" : " — NO AUTH KEY: any peer that reaches this port is accepted")}"
-                : "listening: no (inbound publishers cannot reach this machine)",
+                : $"listening: no ({ConnectionRowFormatter.NotListening})",
             HealthSource(live),
             string.Empty,
         };

@@ -102,8 +102,12 @@ internal sealed class ConnectionsForm : Form
         var unauthenticated = vm.ListenEnabled && !vm.AuthKeyConfigured;
         _subtitle.Text = vm.ListenEnabled
             ? $"Listening on port {vm.ListenPort}{(unauthenticated ? " · NO AUTH KEY: any peer that reaches this port is accepted" : "")} · {vm.Rows.Count} link(s)"
-            : $"Not listening — inbound publishers cannot reach this machine · {vm.Rows.Count} link(s)";
-        _subtitle.ForeColor = vm.ListenEnabled && !unauthenticated ? ImrdyPalette.FgSecondary : FgBad;
+            : $"Not listening — {ConnectionRowFormatter.NotListening} · {vm.Rows.Count} link(s)";
+
+        // Only the unauthenticated case is an alarm. Not listening is an ordinary, working
+        // configuration on the WSL path — the file sink needs no listener — and painting it red
+        // told the operator to fix something that was not broken.
+        _subtitle.ForeColor = unauthenticated ? FgBad : ImrdyPalette.FgSecondary;
 
         var selected = SelectedName();
         _emptyState.Visible = vm.Rows.Count == 0;
@@ -448,11 +452,34 @@ internal sealed class ConnectionsForm : Form
     {
         if (SelectedRow() is not { } row) return;
 
-        var previousName = row.Name;
+        // A row whose name came only from the beat filename must not seed a record with it. The
+        // token is lossy — PC-Excalibur-Ubuntu-24.04 flattens to pc-excalibur-ubuntu-24_04 — and
+        // every behaviour keyed on a saved record joins on its name by plain case-insensitive
+        // equality against the publisher's own origin_machine, so such a record would never match
+        // again: the desktop mapping, the mute and clear-this-machine would all silently do
+        // nothing, forever, with the operator shown a healthy registered row. So the name field
+        // starts empty and the dialog's own "Machine name is required" rule makes them type it.
+        if (row.NameIsToken)
+        {
+            MessageBox.Show(
+                this,
+                $"This publisher has not delivered a session yet, so imrdy only knows it by its "
+                + $"heartbeat filename: {row.Name}\n\n"
+                + "That name is flattened and may not be exact. Enter the machine's own name — "
+                + "network.machineName on that machine, or <hostname>-<distro> by default — or it "
+                + "will never match the sessions it sends.",
+                "imrdy — Confirm the machine name",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+
+        // Null for an unregistered row: there is no record to rename, and handing the token name
+        // in as one would ask the store to remove a record that does not exist.
+        var previousName = row.IsRegistered ? row.Name : null;
 
         using var dialog = new PublisherEditDialog(new PublisherEntry
         {
-            Name = row.Name,
+            Name = row.NameIsToken ? string.Empty : row.Name,
             Endpoint = row.Endpoint,
             DesktopIndex = row.DesktopIndex,
             Muted = row.Muted,

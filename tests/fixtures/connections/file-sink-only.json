@@ -1,0 +1,60 @@
+{
+  "machineName": "workstation",
+  "listenEnabled": false,
+  "listenPort": 47600,
+  "authKeyConfigured": false,
+  "rows": [
+    {
+      "name": "pc-excalibur-Ubuntu-24.04",
+      "endpoint": null,
+      "isRegistered": false,
+      "enabled": true,
+      "muted": false,
+      "desktopIndex": null,
+      "outbound": null,
+      "inbound": {
+        "name": "pc-excalibur-Ubuntu-24.04",
+        "state": 3,
+        "lastSuccessAt": "2026-09-12T07:46:22+00:00",
+        "lastError": null,
+        "sessionCount": 0
+      },
+      "lastDelivery": "3s ago"
+    },
+    {
+      "name": "pc-excalibur-Debian",
+      "endpoint": null,
+      "isRegistered": false,
+      "enabled": true,
+      "muted": false,
+      "desktopIndex": null,
+      "outbound": null,
+      "inbound": {
+        "name": "pc-excalibur-Debian",
+        "state": 3,
+        "lastSuccessAt": "2026-09-12T07:32:10+00:00",
+        "lastError": "no heartbeat for 14m 15s — publisher may be gone",
+        "sessionCount": 0
+      },
+      "lastDelivery": "14m 15s ago"
+    },
+    {
+      "name": "pc-excalibur-ubuntu-22_04",
+      "endpoint": null,
+      "isRegistered": false,
+      "enabled": true,
+      "muted": false,
+      "desktopIndex": null,
+      "outbound": null,
+      "inbound": {
+        "name": "pc-excalibur-ubuntu-22_04",
+        "state": 3,
+        "lastSuccessAt": "2026-09-12T07:46:20+00:00",
+        "lastError": "name derived from the beat filename — confirm it before registering this machine",
+        "sessionCount": 0
+      },
+      "lastDelivery": "5s ago",
+      "nameIsToken": true
+    }
+  ]
+}

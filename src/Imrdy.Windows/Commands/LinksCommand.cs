@@ -156,13 +156,26 @@ internal static class LinksCommand
             : reason;
     }
 
-    private static ConnectionsViewModel BuildFromRecords(PublisherStore store) =>
-        LinksReport.Build(
-            store.Load(),
+    /// <summary>
+    /// The records-only fallback, plus the one live signal a process with no tray can still
+    /// read for itself: the file-sink heartbeats on disk. Without them this path stays blind to
+    /// a publisher that is delivering right now, since it opens no socket and the operator may
+    /// well never have registered it (f-filesink-no-socket).
+    /// </summary>
+    private static ConnectionsViewModel BuildFromRecords(PublisherStore store)
+    {
+        var publishers = store.Load();
+
+        return LinksReport.Build(
+            publishers,
             ConfigReader.Read().Network,
             Environment.MachineName,
             Environment.GetEnvironmentVariable("WSL_DISTRO_NAME"),
+            HeartbeatMachines.Read(
+                ImrdyPaths.Sessions,
+                publishers.Publishers.Select(entry => (string?)entry.Name)),
             DateTimeOffset.UtcNow);
+    }
 
     /// <summary>
     /// Eight columns do not fit the 80 that Spectre assumes when stdout is redirected, and a
@@ -186,7 +199,7 @@ internal static class LinksCommand
         console.MarkupLine($"[bold]{Markup.Escape(vm.MachineName)}[/]");
         console.MarkupLine(vm.ListenEnabled
             ? $"[dim]Listening on port {vm.ListenPort}[/]"
-            : "[yellow]Not listening[/] [dim]— inbound publishers cannot reach this machine[/]");
+            : $"[yellow]Not listening[/] [dim]— {Markup.Escape(ConnectionRowFormatter.NotListening)}[/]");
 
         // D10's key is what makes a misconfigured machine fail loudly rather than inject
         // sessions into the wrong tray. Listening without one is a state, not a default worth

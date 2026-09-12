@@ -90,11 +90,16 @@ internal static class Program
     {
         try
         {
+            var publishers = new PublisherStore(ImrdyPaths.Publishers).Load();
+
             var vm = LinksReport.Build(
-                new PublisherStore(ImrdyPaths.Publishers).Load(),
+                publishers,
                 ConfigReader.Read().Network,
                 Environment.MachineName,
                 Environment.GetEnvironmentVariable("WSL_DISTRO_NAME"),
+                HeartbeatMachines.Read(
+                    ImrdyPaths.Sessions,
+                    publishers.Publishers.Select(entry => (string?)entry.Name)),
                 DateTimeOffset.UtcNow);
 
             if (json)

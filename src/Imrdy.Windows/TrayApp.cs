@@ -1568,10 +1568,22 @@ internal sealed class TrayApp : ApplicationContext, ISessionInteractionRouter, I
     /// <inheritdoc/>
     ConnectionsViewModel IConnectionsHost.BuildViewModel()
     {
+        var publishers = _publisherStore.Load();
+
+        // f-filesink-no-socket: the listener knows only TCP publishers, so a file-sink
+        // publisher delivering into this machine right now would show nothing here. Names come
+        // from the records first and from the sessions those publishers already ingested
+        // second — the beat filename is a lossy token and cannot be reversed into a name.
+        var heartbeats = HeartbeatMachines.Resolve(
+            _heartbeats.Beats,
+            publishers.Publishers.Select(entry => (string?)entry.Name)
+                .Concat(_sessions.Values.Select(session => session.State?.OriginMachine)));
+
         return ConnectionsViewModelBuilder.Build(
-            _publisherStore.Load(),
+            publishers,
             _sinkRegistry?.Health() ?? [],
             _wireListener?.Health() ?? [],
+            heartbeats,
             _machineName,
             _networkConfig.ListenEnabled,
             _networkConfig.ListenPort,
